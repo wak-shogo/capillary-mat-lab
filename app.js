@@ -1076,9 +1076,13 @@ const state = {
   mode: "meander",
   paramsByMode: Object.fromEntries(Object.values(MODELS).map((model) => [model.id, { ...model.defaults }])),
   currentDesign: null,
+  renderedMode: null,
   geometry: null,
   edgeGeometry: null,
   controlMap: new Map(),
+  dirtyModes: new Set(),
+  isRendering: false,
+  renderPromise: null,
 };
 
 const dom = {
@@ -1089,12 +1093,14 @@ const dom = {
   metricsGrid: document.querySelector("#metricsGrid"),
   warningList: document.querySelector("#warningList"),
   actionStatus: document.querySelector("#actionStatus"),
+  updatePreviewBtn: document.querySelector("#updatePreviewBtn"),
   downloadBtn: document.querySelector("#downloadBtn"),
   copyLinkBtn: document.querySelector("#copyLinkBtn"),
   resetBtn: document.querySelector("#resetBtn"),
   meshInfo: document.querySelector("#meshInfo"),
   planCanvas: document.querySelector("#planCanvas"),
   viewerMount: document.querySelector("#viewerMount"),
+  previewLoading: document.querySelector("#previewLoading"),
   noteSummary: document.querySelector("#noteSummary"),
   noteCopy: document.querySelector("#noteCopy"),
   heroEyebrow: document.querySelector("#heroEyebrow"),
@@ -1342,6 +1348,44 @@ function getActiveParams() {
   return state.paramsByMode[state.mode];
 }
 
+function currentModeHasPendingChanges() {
+  return state.dirtyModes.has(state.mode);
+}
+
+function updateActionButtons() {
+  const dirty = currentModeHasPendingChanges();
+  dom.updatePreviewBtn.disabled = state.isRendering || !dirty;
+  dom.updatePreviewBtn.textContent = state.isRendering ? "Updating..." : "Update Preview";
+  dom.downloadBtn.disabled = state.isRendering;
+  dom.copyLinkBtn.disabled = state.isRendering;
+  dom.resetBtn.disabled = state.isRendering;
+}
+
+function markDirty(message = "変更があります。Update Preview を押すと再計算します。") {
+  const wasDirty = currentModeHasPendingChanges();
+  state.dirtyModes.add(state.mode);
+  updateActionButtons();
+  if (!wasDirty) {
+    dom.actionStatus.textContent = message;
+  }
+}
+
+function clearDirty(mode = state.mode) {
+  state.dirtyModes.delete(mode);
+  updateActionButtons();
+}
+
+function setLoading(loading) {
+  dom.previewLoading.hidden = !loading;
+  updateActionButtons();
+}
+
+function nextPaint() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
 function parseFieldValue(field, raw) {
   if (field.type === "toggle") {
     return raw === "1" || raw === "true";
@@ -1411,8 +1455,7 @@ function renderModeTabs() {
       }
       state.mode = button.dataset.mode;
       renderModeUi();
-      renderAll();
-      dom.actionStatus.textContent = `${getModel().shortLabel} モードへ切り替えました。`;
+      void renderAll(`${getModel().shortLabel} モードへ切り替えました。`);
     });
   }
 }
@@ -1432,8 +1475,7 @@ function renderPresets() {
   for (const button of dom.presetGrid.querySelectorAll("[data-preset]")) {
     button.addEventListener("click", () => {
       const preset = model.presets[button.dataset.preset];
-      applyParams(preset.params);
-      dom.actionStatus.textContent = `${preset.label} preset を適用しました。`;
+      applyParams(preset.params, { render: true, statusMessage: `${preset.label} preset を適用しました。` });
     });
   }
 }
@@ -1519,7 +1561,7 @@ function renderControls() {
       toggle.addEventListener("input", () => {
         getActiveParams()[field.key] = toggle.checked;
         setDependentControlStates();
-        renderAll();
+        markDirty();
       });
       state.controlMap.set(field.key, { field, toggle, root: toggle.closest("[data-control]") });
       continue;
@@ -1532,10 +1574,11 @@ function renderControls() {
       if (!Number.isFinite(next)) {
         return;
       }
-      getActiveParams()[field.key] = next;
-      range.value = String(next);
-      number.value = String(next);
-      renderAll();
+      const clamped = clamp(next, field.min, field.max);
+      getActiveParams()[field.key] = clamped;
+      range.value = String(clamped);
+      number.value = String(clamped);
+      markDirty();
     };
     range.addEventListener("input", handleInput);
     number.addEventListener("input", handleInput);
@@ -1585,7 +1628,7 @@ function setDependentControlStates() {
   }
 }
 
-function applyParams(partial) {
+function applyParams(partial, options = {}) {
   const model = getModel();
   const nextParams = getActiveParams();
   for (const field of model.fields) {
@@ -1604,7 +1647,11 @@ function applyParams(partial) {
   }
   syncControls();
   setDependentControlStates();
-  renderAll();
+  if (options.render) {
+    void renderAll(options.statusMessage || "");
+    return;
+  }
+  markDirty(options.statusMessage);
 }
 
 function buildChannelAxis(span, frame, capillary, wall, spacing) {
@@ -3849,7 +3896,8 @@ function drawSpongePlan(design) {
 }
 
 function drawPlan(design) {
-  getModel().drawPlan(design);
+  const model = MODELS[design.modeId] || getModel();
+  model.drawPlan(design);
 }
 
 function resizeViewer() {
@@ -3864,16 +3912,50 @@ function resizeViewer() {
   }
 }
 
-function renderAll() {
-  const design = getModel().buildDesign(getActiveParams());
-  state.currentDesign = design;
-  state.paramsByMode[state.mode] = { ...design.params };
-  syncControls();
-  setDependentControlStates();
-  updateMetrics(design);
-  updateGeometry(design);
-  drawPlan(design);
-  window.history.replaceState(null, "", toHash());
+async function renderAll(statusMessage = "") {
+  if (state.isRendering) {
+    return state.renderPromise;
+  }
+
+  state.isRendering = true;
+  setLoading(true);
+  state.renderPromise = (async () => {
+    await nextPaint();
+    const design = getModel().buildDesign(getActiveParams());
+    design.modeId = state.mode;
+    state.currentDesign = design;
+    state.renderedMode = state.mode;
+    state.paramsByMode[state.mode] = { ...design.params };
+    syncControls();
+    setDependentControlStates();
+    updateMetrics(design);
+    updateGeometry(design);
+    drawPlan(design);
+    window.history.replaceState(null, "", toHash());
+    clearDirty(state.mode);
+    if (statusMessage) {
+      dom.actionStatus.textContent = statusMessage;
+    }
+    return design;
+  })();
+
+  try {
+    return await state.renderPromise;
+  } finally {
+    state.renderPromise = null;
+    state.isRendering = false;
+    setLoading(false);
+  }
+}
+
+async function ensureCurrentDesign(statusMessage = "") {
+  if (!state.currentDesign || state.renderedMode !== state.mode || currentModeHasPendingChanges()) {
+    return renderAll(statusMessage);
+  }
+  if (statusMessage) {
+    dom.actionStatus.textContent = statusMessage;
+  }
+  return state.currentDesign;
 }
 
 function exportStl(design) {
@@ -3901,8 +3983,11 @@ function exportStl(design) {
   return new Blob([lines.join("\n")], { type: "model/stl" });
 }
 
-function downloadCurrentStl() {
-  const design = state.currentDesign;
+async function downloadCurrentStl() {
+  const design = await ensureCurrentDesign();
+  if (!design) {
+    return;
+  }
   const blob = exportStl(design);
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -3919,6 +4004,7 @@ function downloadCurrentStl() {
 }
 
 async function copyShareUrl() {
+  await ensureCurrentDesign();
   const url = `${window.location.origin}${window.location.pathname}${toHash()}`;
   try {
     await navigator.clipboard.writeText(url);
@@ -3938,14 +4024,16 @@ function animate() {
   renderer.render(scene, camera);
 }
 
+dom.updatePreviewBtn.addEventListener("click", () => {
+  void renderAll("プレビューを更新しました。");
+});
 dom.downloadBtn.addEventListener("click", downloadCurrentStl);
 dom.copyLinkBtn.addEventListener("click", copyShareUrl);
 dom.resetBtn.addEventListener("click", () => {
   state.paramsByMode[state.mode] = { ...getModel().defaults };
   syncControls();
   setDependentControlStates();
-  renderAll();
-  dom.actionStatus.textContent = "既定値に戻しました。";
+  void renderAll("既定値に戻しました。");
 });
 
 window.addEventListener("resize", resizeViewer);
@@ -3958,6 +4046,7 @@ if (initialFromHash) {
 
 initRenderer();
 renderModeUi();
-renderAll();
+updateActionButtons();
+void renderAll();
 resizeViewer();
 animate();

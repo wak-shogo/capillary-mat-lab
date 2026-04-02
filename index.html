@@ -64,6 +64,7 @@
           <span>共有と書き出し</span>
         </div>
         <div class="action-stack">
+          <button id="updatePreviewBtn" type="button" class="primary-btn">Update Preview</button>
           <button id="downloadBtn" type="button" class="primary-btn">Download STL</button>
           <button id="copyLinkBtn" type="button">Copy Share URL</button>
           <button id="resetBtn" type="button">Reset Defaults</button>
@@ -89,10 +90,10 @@
     <main class="main-view">
       <section class="hero-card">
         <div>
-          <p id="heroEyebrow" class="eyebrow">Realtime Preview</p>
+          <p id="heroEyebrow" class="eyebrow">Manual Preview</p>
           <h2 id="heroTitle">給水スリットと通気チャンバーを同時に可視化</h2>
           <p id="heroLead" class="lead compact">
-            左のパラメータを動かすと 3D モデルと平面図が即時更新されます。計算はすべてブラウザ内で行い、STL もローカル生成です。
+            左のパラメータを調整したあとに Update Preview を押すと、3D モデルと平面図を再計算します。計算はすべてブラウザ内で行い、STL もローカル生成です。
           </p>
         </div>
         <div id="legend" class="legend"></div>
@@ -114,6 +115,12 @@
           </div>
           <canvas id="planCanvas" width="960" height="720"></canvas>
         </article>
+        <div id="previewLoading" class="loading-overlay" hidden>
+          <div class="loading-card" role="status" aria-live="polite" aria-label="計算中">
+            <div class="loading-spinner" aria-hidden="true"></div>
+            <span>計算中...</span>
+          </div>
+        </div>
       </section>
     </main>
   </div>
