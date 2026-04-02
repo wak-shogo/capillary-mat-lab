@@ -916,6 +916,12 @@ function nearestDistance(centers, value) {
   return best;
 }
 
+function classifyMatCell(xAxis, yAxis, ix, iy) {
+  const isSolid = Boolean(xAxis.wallMask[ix] || yAxis.wallMask[iy]);
+  const isSlot = !isSolid && Boolean(xAxis.slotMask[ix] || yAxis.slotMask[iy]);
+  return { isSolid, isSlot };
+}
+
 function buildOccupancyFromTopHeights(xEdges, yEdges, zEdges, solidMask, topHeights) {
   const nx = xEdges.length - 1;
   const ny = yEdges.length - 1;
@@ -1115,8 +1121,7 @@ function buildMatDesign(inputParams) {
   for (let iy = 0; iy < ny; iy += 1) {
     const yCenter = (yAxis.edges[iy] + yAxis.edges[iy + 1]) * 0.5;
     for (let ix = 0; ix < nx; ix += 1) {
-      const isSlot = Boolean(xAxis.slotMask[ix] || yAxis.slotMask[iy]);
-      const isSolid = !isSlot && Boolean(xAxis.wallMask[ix] || yAxis.wallMask[iy]);
+      const { isSolid } = classifyMatCell(xAxis, yAxis, ix, iy);
       if (!isSolid) {
         continue;
       }
@@ -1492,11 +1497,20 @@ function drawMatPlan(design) {
   fillIntervals(ctx, design.yAxis.solidIntervals, design.params.width, design.params.width, scale, "#3e8b58", false);
 
   ctx.fillStyle = "rgba(148, 231, 176, 0.95)";
-  for (const [slotStart, slotEnd] of design.xAxis.slotIntervals) {
-    ctx.fillRect(slotStart * scale, 0, Math.max(1, (slotEnd - slotStart) * scale), design.params.length * scale);
-  }
-  for (const [slotStart, slotEnd] of design.yAxis.slotIntervals) {
-    ctx.fillRect(0, slotStart * scale, design.params.width * scale, Math.max(1, (slotEnd - slotStart) * scale));
+  const nx = design.xAxis.edges.length - 1;
+  const ny = design.yAxis.edges.length - 1;
+  for (let iy = 0; iy < ny; iy += 1) {
+    const yStart = design.yAxis.edges[iy] * scale;
+    const cellHeight = Math.max(1, (design.yAxis.edges[iy + 1] - design.yAxis.edges[iy]) * scale);
+    for (let ix = 0; ix < nx; ix += 1) {
+      const { isSlot } = classifyMatCell(design.xAxis, design.yAxis, ix, iy);
+      if (!isSlot) {
+        continue;
+      }
+      const xStart = design.xAxis.edges[ix] * scale;
+      const cellWidth = Math.max(1, (design.xAxis.edges[ix + 1] - design.xAxis.edges[ix]) * scale);
+      ctx.fillRect(xStart, yStart, cellWidth, cellHeight);
+    }
   }
 
   if (design.params.dimple) {
