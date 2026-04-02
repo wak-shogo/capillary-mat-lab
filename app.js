@@ -467,6 +467,25 @@ function buildEdges(span, resolution) {
   return edges;
 }
 
+function buildUniqueEdges(span, anchors = []) {
+  const points = [0, span];
+  for (const anchor of anchors) {
+    if (!Number.isFinite(anchor)) {
+      continue;
+    }
+    points.push(clamp(anchor, 0, span));
+  }
+  points.sort((a, b) => a - b);
+
+  const unique = [];
+  for (const point of points) {
+    if (!unique.length || Math.abs(point - unique[unique.length - 1]) > 1e-6) {
+      unique.push(point);
+    }
+  }
+  return Float32Array.from(unique);
+}
+
 function buildAnchoredEdges(span, resolution, anchors = []) {
   const points = [0, span];
   for (const anchor of anchors) {
@@ -818,7 +837,7 @@ function applyParams(partial) {
   renderAll();
 }
 
-function buildChannelAxis(span, resolution, frame, capillary, wall, spacing) {
+function buildChannelAxis(span, frame, capillary, wall, spacing) {
   const interior = Math.max(span - frame * 2, 0.1);
   const usableCapillary = clamp(capillary, 0.25, Math.max(0.25, interior - 0.36));
   const usableWall = clamp(wall, 0.18, Math.max(0.18, (interior - usableCapillary) * 0.5));
@@ -856,7 +875,7 @@ function buildChannelAxis(span, resolution, frame, capillary, wall, spacing) {
   for (const [start, end] of wallIntervals) {
     anchors.push(start, end);
   }
-  const edges = buildAnchoredEdges(span, resolution, anchors);
+  const edges = buildUniqueEdges(span, anchors);
   const mergedSolid = mergeIntervals(solidIntervals);
   const mergedWalls = mergeIntervals(wallIntervals.concat([
     [0, frame],
@@ -921,10 +940,12 @@ function classifyMatCell(xAxis, yAxis, ix, iy) {
   const yWall = Boolean(yAxis.wallMask[iy]);
   const xSlot = Boolean(xAxis.slotMask[ix]);
   const ySlot = Boolean(yAxis.slotMask[iy]);
+  const xChamber = !xWall && !xSlot;
+  const yChamber = !yWall && !ySlot;
   const isSlot = xSlot || ySlot;
   const isSolid = !isSlot && (xWall || yWall);
-  const isBridge = xSlot && ySlot;
-  return { xWall, yWall, xSlot, ySlot, isSolid, isSlot, isBridge };
+  const isBridge = (xWall && ySlot) || (xSlot && yWall);
+  return { xWall, yWall, xSlot, ySlot, xChamber, yChamber, isSolid, isSlot, isBridge };
 }
 
 function buildOccupancyFromTopHeights(xEdges, yEdges, zEdges, solidMask, topHeights, bridgeMask, bridgeHeight) {
@@ -1113,8 +1134,8 @@ function buildMatDesign(inputParams) {
   };
 
   const resolution = estimateMatResolution(params);
-  const xAxis = buildChannelAxis(params.width, resolution, params.frame, params.capillary, params.wall, params.xSpacing);
-  const yAxis = buildChannelAxis(params.length, resolution, params.frame, params.capillary, params.wall, params.ySpacing);
+  const xAxis = buildChannelAxis(params.width, params.frame, params.capillary, params.wall, params.xSpacing);
+  const yAxis = buildChannelAxis(params.length, params.frame, params.capillary, params.wall, params.ySpacing);
   const nx = xAxis.edges.length - 1;
   const ny = yAxis.edges.length - 1;
   const solidMask = new Uint8Array(nx * ny);
@@ -1198,6 +1219,7 @@ function buildMatDesign(inputParams) {
     mode: "mat",
     params,
     resolution,
+    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / XY exact / Z ${formatValue(zStep, 2)} mm`,
     mesh,
     xAxis,
     yAxis,
@@ -1440,10 +1462,9 @@ function updateMetrics(design) {
     })
     .join("");
 
-  dom.meshInfo.textContent = `${design.mesh.triangleCount.toLocaleString()} tris / ${formatValue(
-    design.resolution,
-    2
-  )} mm vox`;
+  dom.meshInfo.textContent =
+    design.meshInfoText ||
+    `${design.mesh.triangleCount.toLocaleString()} tris / ${formatValue(design.resolution, 2)} mm vox`;
 }
 
 function updateGeometry(design) {
@@ -1522,21 +1543,8 @@ function drawMatPlan(design) {
   fillIntervals(ctx, design.yAxis.solidIntervals, design.params.width, design.params.width, scale, "#3e8b58", false);
 
   ctx.fillStyle = "rgba(148, 231, 176, 0.95)";
-  const nx = design.xAxis.edges.length - 1;
-  const ny = design.yAxis.edges.length - 1;
-  for (let iy = 0; iy < ny; iy += 1) {
-    const yStart = design.yAxis.edges[iy] * scale;
-    const cellHeight = Math.max(1, (design.yAxis.edges[iy + 1] - design.yAxis.edges[iy]) * scale);
-    for (let ix = 0; ix < nx; ix += 1) {
-      const { isSlot } = classifyMatCell(design.xAxis, design.yAxis, ix, iy);
-      if (!isSlot) {
-        continue;
-      }
-      const xStart = design.xAxis.edges[ix] * scale;
-      const cellWidth = Math.max(1, (design.xAxis.edges[ix + 1] - design.xAxis.edges[ix]) * scale);
-      ctx.fillRect(xStart, yStart, cellWidth, cellHeight);
-    }
-  }
+  fillIntervals(ctx, design.xAxis.slotIntervals, design.params.length, design.params.length, scale, "rgba(148, 231, 176, 0.95)", true);
+  fillIntervals(ctx, design.yAxis.slotIntervals, design.params.width, design.params.width, scale, "rgba(148, 231, 176, 0.95)", false);
 
   if (design.params.dimple) {
     ctx.fillStyle = "rgba(242, 249, 193, 0.66)";
