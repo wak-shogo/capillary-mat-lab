@@ -917,12 +917,17 @@ function nearestDistance(centers, value) {
 }
 
 function classifyMatCell(xAxis, yAxis, ix, iy) {
-  const isSolid = Boolean(xAxis.wallMask[ix] || yAxis.wallMask[iy]);
-  const isSlot = !isSolid && Boolean(xAxis.slotMask[ix] || yAxis.slotMask[iy]);
-  return { isSolid, isSlot };
+  const xWall = Boolean(xAxis.wallMask[ix]);
+  const yWall = Boolean(yAxis.wallMask[iy]);
+  const xSlot = Boolean(xAxis.slotMask[ix]);
+  const ySlot = Boolean(yAxis.slotMask[iy]);
+  const isSlot = xSlot || ySlot;
+  const isSolid = !isSlot && (xWall || yWall);
+  const isBridge = xSlot && ySlot;
+  return { xWall, yWall, xSlot, ySlot, isSolid, isSlot, isBridge };
 }
 
-function buildOccupancyFromTopHeights(xEdges, yEdges, zEdges, solidMask, topHeights) {
+function buildOccupancyFromTopHeights(xEdges, yEdges, zEdges, solidMask, topHeights, bridgeMask, bridgeHeight) {
   const nx = xEdges.length - 1;
   const ny = yEdges.length - 1;
   const nz = zEdges.length - 1;
@@ -936,12 +941,14 @@ function buildOccupancyFromTopHeights(xEdges, yEdges, zEdges, solidMask, topHeig
   for (let iy = 0; iy < ny; iy += 1) {
     for (let ix = 0; ix < nx; ix += 1) {
       const flatIndex = ix + iy * nx;
-      if (!solidMask[flatIndex]) {
-        continue;
-      }
-      const topHeight = topHeights[flatIndex];
       for (let iz = 0; iz < nz; iz += 1) {
-        if (zCenters[iz] > topHeight + 1e-6) {
+        let filled = false;
+        if (solidMask[flatIndex]) {
+          filled = zCenters[iz] <= topHeights[flatIndex] + 1e-6;
+        } else if (bridgeMask && bridgeMask[flatIndex]) {
+          filled = zCenters[iz] <= bridgeHeight + 1e-6;
+        }
+        if (!filled) {
           continue;
         }
         occupancy[ix + nx * (iy + ny * iz)] = 1;
@@ -1111,6 +1118,7 @@ function buildMatDesign(inputParams) {
   const nx = xAxis.edges.length - 1;
   const ny = yAxis.edges.length - 1;
   const solidMask = new Uint8Array(nx * ny);
+  const bridgeMask = new Uint8Array(nx * ny);
   const topHeights = new Float32Array(nx * ny);
   const dimpleDepth = params.dimple ? Math.min(params.dimpleDepth, params.thickness * 0.58) : 0;
   const dimpleRadius = Math.max(
@@ -1121,12 +1129,15 @@ function buildMatDesign(inputParams) {
   for (let iy = 0; iy < ny; iy += 1) {
     const yCenter = (yAxis.edges[iy] + yAxis.edges[iy + 1]) * 0.5;
     for (let ix = 0; ix < nx; ix += 1) {
-      const { isSolid } = classifyMatCell(xAxis, yAxis, ix, iy);
+      const { isSolid, isBridge } = classifyMatCell(xAxis, yAxis, ix, iy);
+      const flatIndex = ix + iy * nx;
       if (!isSolid) {
+        if (isBridge) {
+          bridgeMask[flatIndex] = 1;
+        }
         continue;
       }
       const xCenter = (xAxis.edges[ix] + xAxis.edges[ix + 1]) * 0.5;
-      const flatIndex = ix + iy * nx;
       solidMask[flatIndex] = 1;
       let topHeight = params.thickness;
       if (dimpleDepth > 0) {
@@ -1143,7 +1154,20 @@ function buildMatDesign(inputParams) {
   }
 
   const zEdges = buildZEdges(params.thickness, resolution);
-  const occupancyData = buildOccupancyFromTopHeights(xAxis.edges, yAxis.edges, zEdges, solidMask, topHeights);
+  const zStep = zEdges.length > 1 ? zEdges[1] - zEdges[0] : params.thickness;
+  const bridgeHeight = Math.max(
+    zStep * 1.05,
+    Math.min(params.thickness * 0.22, Math.max(params.wall * 0.45, params.capillary * 0.28))
+  );
+  const occupancyData = buildOccupancyFromTopHeights(
+    xAxis.edges,
+    yAxis.edges,
+    zEdges,
+    solidMask,
+    topHeights,
+    bridgeMask,
+    bridgeHeight
+  );
   const mesh = buildVoxelMesh(xAxis.edges, yAxis.edges, zEdges, occupancyData.occupancy);
   const totalVolume = params.width * params.length * params.thickness;
   const solidVolume = occupancyData.occupiedCount * occupancyData.voxelVolume;
@@ -1183,6 +1207,7 @@ function buildMatDesign(inputParams) {
       { label: "実壁厚", value: `${formatValue((xAxis.effectiveWall + yAxis.effectiveWall) * 0.5, 2)} mm` },
       { label: "列本数", value: `${xAxis.lineCount} × ${yAxis.lineCount}` },
       { label: "外壁クリアランス", value: `X ${formatValue(params.xSpacing, 1)} / Y ${formatValue(params.ySpacing, 1)} mm` },
+      { label: "交点ブリッジ厚", value: `${formatValue(bridgeHeight, 2)} mm` },
       { label: "実空隙率", value: `${formatValue(porosity * 100, 1)} %` },
       { label: "概算質量", value: `${formatValue(massGram, 1)} g` },
     ],
