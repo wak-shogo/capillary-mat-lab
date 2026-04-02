@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Capillary Mat Lab</title>
+  <meta
+    name="description"
+    content="植物育成向けの毛細管マットをブラウザで設計し、3DプレビューとSTL書き出しを行う静的Webアプリ"
+  />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="./styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="page-shell">
+    <aside class="sidebar">
+      <p class="eyebrow">Static GitHub Pages App</p>
+      <h1>Capillary Mat Lab</h1>
+      <p class="lead">
+        下側から給水しつつ、上側には空気が抜ける 3D プリント用の毛細管マットを、
+        ブラウザだけで設計して STL に書き出します。
+      </p>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Preset</h2>
+          <span>想定用途から開始</span>
+        </div>
+        <div class="preset-grid">
+          <button type="button" class="preset-btn" data-preset="seedling">Seedling</button>
+          <button type="button" class="preset-btn" data-preset="herb">Herb Tray</button>
+          <button type="button" class="preset-btn" data-preset="orchid">Orchid Wick</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Parameters</h2>
+          <span>空隙率から壁厚を自動調整</span>
+        </div>
+
+        <label class="control" for="widthRange">
+          <div class="control-head">
+            <span>幅</span>
+            <span class="unit">mm</span>
+          </div>
+          <div class="control-inputs">
+            <input id="widthRange" data-field="width" type="range" min="60" max="220" step="2" />
+            <input id="widthNumber" data-field="width" type="number" min="60" max="220" step="2" />
+          </div>
+        </label>
+
+        <label class="control" for="lengthRange">
+          <div class="control-head">
+            <span>長さ</span>
+            <span class="unit">mm</span>
+          </div>
+          <div class="control-inputs">
+            <input id="lengthRange" data-field="length" type="range" min="60" max="220" step="2" />
+            <input id="lengthNumber" data-field="length" type="number" min="60" max="220" step="2" />
+          </div>
+        </label>
+
+        <label class="control" for="thicknessRange">
+          <div class="control-head">
+            <span>厚み</span>
+            <span class="unit">mm</span>
+          </div>
+          <div class="control-inputs">
+            <input id="thicknessRange" data-field="thickness" type="range" min="1.2" max="6" step="0.1" />
+            <input id="thicknessNumber" data-field="thickness" type="number" min="1.2" max="6" step="0.1" />
+          </div>
+        </label>
+
+        <label class="control" for="pitchRange">
+          <div class="control-head">
+            <span>格子ピッチ</span>
+            <span class="unit">mm</span>
+          </div>
+          <div class="control-inputs">
+            <input id="pitchRange" data-field="pitch" type="range" min="4" max="18" step="0.2" />
+            <input id="pitchNumber" data-field="pitch" type="number" min="4" max="18" step="0.2" />
+          </div>
+        </label>
+
+        <label class="control" for="gapRange">
+          <div class="control-head">
+            <span>毛細管スリット径</span>
+            <span class="unit">mm</span>
+          </div>
+          <div class="control-inputs">
+            <input id="gapRange" data-field="gap" type="range" min="0.4" max="2.4" step="0.05" />
+            <input id="gapNumber" data-field="gap" type="number" min="0.4" max="2.4" step="0.05" />
+          </div>
+        </label>
+
+        <label class="control" for="porosityRange">
+          <div class="control-head">
+            <span>目標空隙率</span>
+            <span class="unit">ratio</span>
+          </div>
+          <div class="control-inputs">
+            <input id="porosityRange" data-field="porosity" type="range" min="0.42" max="0.84" step="0.01" />
+            <input id="porosityNumber" data-field="porosity" type="number" min="0.42" max="0.84" step="0.01" />
+          </div>
+        </label>
+
+        <label class="control" for="frameRange">
+          <div class="control-head">
+            <span>外周フレーム幅</span>
+            <span class="unit">mm</span>
+          </div>
+          <div class="control-inputs">
+            <input id="frameRange" data-field="frame" type="range" min="2" max="10" step="0.2" />
+            <input id="frameNumber" data-field="frame" type="number" min="2" max="10" step="0.2" />
+          </div>
+        </label>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Output</h2>
+          <span>共有と書き出し</span>
+        </div>
+        <div class="action-stack">
+          <button id="downloadBtn" type="button" class="primary-btn">Download STL</button>
+          <button id="copyLinkBtn" type="button">Copy Share URL</button>
+          <button id="resetBtn" type="button">Reset Defaults</button>
+        </div>
+        <p id="actionStatus" class="microcopy"></p>
+      </section>
+
+      <section class="panel metrics-panel">
+        <div class="panel-head">
+          <h2>Derived Metrics</h2>
+          <span>出力値</span>
+        </div>
+        <div id="metricsGrid" class="metrics-grid"></div>
+        <div id="warningList" class="warning-list"></div>
+      </section>
+
+      <details class="panel note-panel">
+        <summary>設計メモ</summary>
+        <div class="note-copy">
+          <p>
+            このモデルは、細いスリットを毛細管の主経路、大きな四角い開口を通気チャンバーとして扱う
+            「二重壁ラティス」です。水は下側からスリットに吸い上がり、広い開口で酸素を確保します。
+          </p>
+          <p>
+            空隙率を上げると自動で壁が薄くなり、通気と根の侵入余地は増えますが、
+            給水量と剛性は落ちます。逆にスリット径を狭めると毛細管は強くなりますが、詰まりやすくなります。
+          </p>
+          <p>
+            0.4 mm ノズル想定では、壁厚 0.55 mm 以上、チャンバー開口 1.2 mm 以上を目安にすると扱いやすいです。
+          </p>
+        </div>
+      </details>
+    </aside>
+
+    <main class="main-view">
+      <section class="hero-card">
+        <div>
+          <p class="eyebrow">Realtime Preview</p>
+          <h2>給水スリットと通気チャンバーを同時に可視化</h2>
+          <p class="lead compact">
+            左のパラメータを動かすと 3D モデルと平面図が即時更新されます。計算はすべてブラウザ内で行い、STL もローカル生成です。
+          </p>
+        </div>
+        <div class="legend">
+          <span><i class="swatch solid"></i>樹脂</span>
+          <span><i class="swatch slot"></i>毛細管スリット</span>
+          <span><i class="swatch chamber"></i>通気チャンバー</span>
+        </div>
+      </section>
+
+      <section class="viewer-grid">
+        <article class="viewer-panel">
+          <div class="panel-head">
+            <h2>3D Preview</h2>
+            <span id="meshInfo">...</span>
+          </div>
+          <div id="viewerMount" class="viewer-mount"></div>
+        </article>
+
+        <article class="viewer-panel plan-panel">
+          <div class="panel-head">
+            <h2>Top View</h2>
+            <span>毛細管配置</span>
+          </div>
+          <canvas id="planCanvas" width="960" height="720"></canvas>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
