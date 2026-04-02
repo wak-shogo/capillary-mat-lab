@@ -27,23 +27,23 @@ const MAT_FIELDS = [
   },
   {
     key: "xSpacing",
-    label: "縦列どうしの距離",
+    label: "縦列の外壁クリアランス",
     unit: "mm",
     min: 0.6,
     max: 16,
     step: 0.1,
     precision: 2,
-    help: "縦方向の毛細管列どうしの間隔です。X 方向の密度を決めます。",
+    help: "隣り合う縦列の外壁どうしの最短距離です。中心間距離ではなく、通気空間の実クリアランスを指定します。",
   },
   {
     key: "ySpacing",
-    label: "横列どうしの距離",
+    label: "横列の外壁クリアランス",
     unit: "mm",
     min: 0.6,
     max: 16,
     step: 0.1,
     precision: 2,
-    help: "横方向の毛細管列どうしの間隔です。Y 方向の密度を別で決められます。",
+    help: "隣り合う横列の外壁どうしの最短距離です。Y 方向の密度を実クリアランス基準で決めます。",
   },
   { key: "frame", label: "外周フレーム幅", unit: "mm", min: 2, max: 12, step: 0.2, precision: 2 },
   {
@@ -145,7 +145,7 @@ const MODELS = {
     planSubtitle: "毛細管列とディンプル配置",
     noteSummary: "平面マット設計メモ",
     noteCopy: [
-      "このモードは、細い毛細管列を縦横に組み合わせた平面マットです。列の内幅を先に決め、その外側に壁厚を付け、列どうしの距離を X/Y 別に指定します。",
+      "このモードは、細い毛細管列を縦横に組み合わせた平面マットです。列の内幅を先に決め、その外側に壁厚を付け、さらに隣列の外壁どうしのクリアランスを X/Y 別に指定します。",
       "列の距離を広げると酸素が入りやすくなり、詰まりにも強くなりますが、マット全域へ水が回る速度は落ちます。逆に密度を上げると広がりは速い代わりに空気室が減ります。",
       "交点ディンプルは、交差する壁の上面だけを浅く落とした播種ポケットです。種を置きやすいですが、深くしすぎると上面の厚みが減るので 0.3 - 0.6 mm 程度が扱いやすいです。",
     ],
@@ -467,6 +467,40 @@ function buildEdges(span, resolution) {
   return edges;
 }
 
+function buildAnchoredEdges(span, resolution, anchors = []) {
+  const points = [0, span];
+  for (const anchor of anchors) {
+    if (!Number.isFinite(anchor)) {
+      continue;
+    }
+    points.push(clamp(anchor, 0, span));
+  }
+  points.sort((a, b) => a - b);
+
+  const unique = [];
+  for (const point of points) {
+    if (!unique.length || Math.abs(point - unique[unique.length - 1]) > 1e-6) {
+      unique.push(point);
+    }
+  }
+
+  const edges = [0];
+  for (let index = 1; index < unique.length; index += 1) {
+    const start = unique[index - 1];
+    const end = unique[index];
+    const segment = end - start;
+    if (segment <= 1e-6) {
+      continue;
+    }
+    const steps = Math.max(1, Math.ceil(segment / resolution));
+    for (let step = 1; step <= steps; step += 1) {
+      edges.push(start + (segment * step) / steps);
+    }
+  }
+  edges[edges.length - 1] = span;
+  return Float32Array.from(edges);
+}
+
 function markInterval(mask, edges, start, end) {
   const clippedStart = clamp(start, 0, edges[edges.length - 1]);
   const clippedEnd = clamp(end, 0, edges[edges.length - 1]);
@@ -501,6 +535,14 @@ function mergeIntervals(intervals) {
     }
   }
   return merged;
+}
+
+function buildIntervalMask(edges, intervals) {
+  const mask = new Uint8Array(edges.length - 1);
+  for (const [start, end] of intervals) {
+    markInterval(mask, edges, start, end);
+  }
+  return mask;
 }
 
 function getModel() {
@@ -777,8 +819,6 @@ function applyParams(partial) {
 }
 
 function buildChannelAxis(span, resolution, frame, capillary, wall, spacing) {
-  const edges = buildEdges(span, resolution);
-  const mask = new Uint8Array(edges.length - 1);
   const interior = Math.max(span - frame * 2, 0.1);
   const usableCapillary = clamp(capillary, 0.25, Math.max(0.25, interior - 0.36));
   const usableWall = clamp(wall, 0.18, Math.max(0.18, (interior - usableCapillary) * 0.5));
@@ -809,16 +849,28 @@ function buildChannelAxis(span, resolution, frame, capillary, wall, spacing) {
     cursor += envelope + spacingValue;
   }
 
-  const mergedSolid = mergeIntervals(solidIntervals);
-  for (const [intervalStart, intervalEnd] of mergedSolid) {
-    markInterval(mask, edges, intervalStart, intervalEnd);
+  const anchors = [frame, span - frame];
+  for (const [start, end] of slotIntervals) {
+    anchors.push(start, end);
   }
+  for (const [start, end] of wallIntervals) {
+    anchors.push(start, end);
+  }
+  const edges = buildAnchoredEdges(span, resolution, anchors);
+  const mergedSolid = mergeIntervals(solidIntervals);
+  const mergedWalls = mergeIntervals(wallIntervals.concat([
+    [0, frame],
+    [span - frame, span],
+  ]));
+  const wallMask = buildIntervalMask(edges, mergedWalls);
+  const slotMask = buildIntervalMask(edges, slotIntervals);
 
   return {
     edges,
-    mask,
     slotIntervals,
-    wallIntervals: mergeIntervals(wallIntervals),
+    slotMask,
+    wallIntervals: mergedWalls,
+    wallMask,
     solidIntervals: mergedSolid,
     channelCenters,
     lineCount: channelCount,
@@ -1050,8 +1102,8 @@ function buildMatDesign(inputParams) {
   const resolution = estimateMatResolution(params);
   const xAxis = buildChannelAxis(params.width, resolution, params.frame, params.capillary, params.wall, params.xSpacing);
   const yAxis = buildChannelAxis(params.length, resolution, params.frame, params.capillary, params.wall, params.ySpacing);
-  const nx = xAxis.mask.length;
-  const ny = yAxis.mask.length;
+  const nx = xAxis.edges.length - 1;
+  const ny = yAxis.edges.length - 1;
   const solidMask = new Uint8Array(nx * ny);
   const topHeights = new Float32Array(nx * ny);
   const dimpleDepth = params.dimple ? Math.min(params.dimpleDepth, params.thickness * 0.58) : 0;
@@ -1063,7 +1115,8 @@ function buildMatDesign(inputParams) {
   for (let iy = 0; iy < ny; iy += 1) {
     const yCenter = (yAxis.edges[iy] + yAxis.edges[iy + 1]) * 0.5;
     for (let ix = 0; ix < nx; ix += 1) {
-      const isSolid = xAxis.mask[ix] || yAxis.mask[iy];
+      const isSlot = Boolean(xAxis.slotMask[ix] || yAxis.slotMask[iy]);
+      const isSolid = !isSlot && Boolean(xAxis.wallMask[ix] || yAxis.wallMask[iy]);
       if (!isSolid) {
         continue;
       }
@@ -1124,7 +1177,7 @@ function buildMatDesign(inputParams) {
       { label: "毛細管内幅", value: `${formatValue((xAxis.effectiveCapillary + yAxis.effectiveCapillary) * 0.5, 2)} mm` },
       { label: "実壁厚", value: `${formatValue((xAxis.effectiveWall + yAxis.effectiveWall) * 0.5, 2)} mm` },
       { label: "列本数", value: `${xAxis.lineCount} × ${yAxis.lineCount}` },
-      { label: "列間距離", value: `X ${formatValue(params.xSpacing, 1)} / Y ${formatValue(params.ySpacing, 1)} mm` },
+      { label: "外壁クリアランス", value: `X ${formatValue(params.xSpacing, 1)} / Y ${formatValue(params.ySpacing, 1)} mm` },
       { label: "実空隙率", value: `${formatValue(porosity * 100, 1)} %` },
       { label: "概算質量", value: `${formatValue(massGram, 1)} g` },
     ],
@@ -1169,13 +1222,6 @@ function buildSpongeDesign(inputParams) {
   };
 
   const resolution = estimateSpongeResolution(params);
-  const xEdges = buildEdges(params.width, resolution);
-  const yEdges = buildEdges(params.length, resolution);
-  const zEdges = buildZEdges(params.thickness, resolution);
-  const nx = xEdges.length - 1;
-  const ny = yEdges.length - 1;
-  const nz = zEdges.length - 1;
-  const occupancy = new Uint8Array(nx * ny * nz);
   const module = params.pore + params.rib;
   const sheetThickness = clamp(params.thickness / (params.layers * 2.2), 0.42, 1.1);
   const layerCenters = Array.from({ length: params.layers }, (_, index) => {
@@ -1186,6 +1232,38 @@ function buildSpongeDesign(inputParams) {
   });
   const wickCentersX = buildWickCenters(params.width, params.frame, params.wickPitch);
   const wickCentersY = buildWickCenters(params.length, params.frame, params.wickPitch);
+  const layerOffsetPatterns = Array.from({ length: params.layers }, (_, layerIndex) => ({
+    x: (layerIndex % 2 ? params.stagger : 0) * module,
+    y: (layerIndex % 2 ? 0 : params.stagger * 0.62) * module,
+  }));
+  const xAnchors = [params.frame, params.width - params.frame];
+  const yAnchors = [params.frame, params.length - params.frame];
+  for (const offset of layerOffsetPatterns) {
+    for (const [start, end] of buildRepeatingIntervals(params.width, params.frame, module, params.rib, offset.x)) {
+      xAnchors.push(start, end);
+    }
+    for (const [start, end] of buildRepeatingIntervals(params.length, params.frame, module, params.rib, offset.y)) {
+      yAnchors.push(start, end);
+    }
+  }
+  const wickRadius = params.wickWidth * 0.5;
+  for (const center of wickCentersX) {
+    xAnchors.push(center - wickRadius, center + wickRadius);
+  }
+  for (const center of wickCentersY) {
+    yAnchors.push(center - wickRadius, center + wickRadius);
+  }
+  const zAnchors = [];
+  for (const center of layerCenters) {
+    zAnchors.push(center - sheetThickness * 0.5, center + sheetThickness * 0.5);
+  }
+  const xEdges = buildAnchoredEdges(params.width, resolution, xAnchors);
+  const yEdges = buildAnchoredEdges(params.length, resolution, yAnchors);
+  const zEdges = buildAnchoredEdges(params.thickness, clamp(Math.min(resolution, sheetThickness * 0.65), 0.18, 0.48), zAnchors);
+  const nx = xEdges.length - 1;
+  const ny = yEdges.length - 1;
+  const nz = zEdges.length - 1;
+  const occupancy = new Uint8Array(nx * ny * nz);
 
   const xCenters = new Float32Array(nx);
   const yCenters = new Float32Array(ny);
@@ -1241,8 +1319,8 @@ function buildSpongeDesign(inputParams) {
         }
 
         if (!solid && activeLayer >= 0) {
-          const offsetX = (activeLayer % 2 ? params.stagger : 0) * module;
-          const offsetY = (activeLayer % 2 ? 0 : params.stagger * 0.62) * module;
+          const offsetX = layerOffsetPatterns[activeLayer].x;
+          const offsetY = layerOffsetPatterns[activeLayer].y;
           const localX = positiveModulo(x - params.frame + offsetX, module);
           const localY = positiveModulo(y - params.frame + offsetY, module);
           solid = localX < params.rib || localY < params.rib;
