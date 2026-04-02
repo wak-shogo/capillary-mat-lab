@@ -99,12 +99,14 @@ const matMesh = new THREE.Mesh(
     side: THREE.DoubleSide,
   })
 );
+matMesh.rotation.x = -Math.PI / 2;
 scene.add(matMesh);
 
 const edgeLines = new THREE.LineSegments(
   new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
   new THREE.LineBasicMaterial({ color: 0x1f5137, transparent: true, opacity: 0.3 })
 );
+edgeLines.rotation.x = -Math.PI / 2;
 scene.add(edgeLines);
 
 const stage = new THREE.Mesh(
@@ -115,7 +117,7 @@ const stage = new THREE.Mesh(
     metalness: 0,
   })
 );
-stage.position.z = -8;
+stage.position.y = -8;
 scene.add(stage);
 
 const accentRing = new THREE.Mesh(
@@ -128,7 +130,7 @@ const accentRing = new THREE.Mesh(
   })
 );
 accentRing.rotation.x = Math.PI / 2;
-accentRing.position.z = -3.8;
+accentRing.position.y = -3.8;
 scene.add(accentRing);
 
 function initRenderer() {
