@@ -1251,6 +1251,9 @@ function buildUniqueEdges(span, anchors = []) {
       unique.push(point);
     }
   }
+  if (unique.length === 1) {
+    unique.push(span);
+  }
   return Float32Array.from(unique);
 }
 
@@ -1270,6 +1273,9 @@ function buildAnchoredEdges(span, resolution, anchors = []) {
       unique.push(point);
     }
   }
+  if (unique.length === 1) {
+    unique.push(span);
+  }
 
   const edges = [0];
   for (let index = 1; index < unique.length; index += 1) {
@@ -1283,6 +1289,9 @@ function buildAnchoredEdges(span, resolution, anchors = []) {
     for (let step = 1; step <= steps; step += 1) {
       edges.push(start + (segment * step) / steps);
     }
+  }
+  if (edges.length === 1) {
+    edges.push(span);
   }
   edges[edges.length - 1] = span;
   return Float32Array.from(edges);
@@ -1392,6 +1401,10 @@ function parseFieldValue(field, raw) {
   }
   const numeric = Number(raw);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function getFieldMin(field) {
+  return field.type === "toggle" ? 0 : 0;
 }
 
 function toHash() {
@@ -1537,14 +1550,14 @@ function renderControls() {
             <input
               id="${controlId(field.key, "range")}"
               type="range"
-              min="${field.min}"
+              min="${getFieldMin(field)}"
               max="${field.max}"
               step="${field.step}"
             />
             <input
               id="${controlId(field.key, "number")}"
               type="number"
-              min="${field.min}"
+              min="${getFieldMin(field)}"
               max="${field.max}"
               step="${field.step}"
             />
@@ -1574,7 +1587,7 @@ function renderControls() {
       if (!Number.isFinite(next)) {
         return;
       }
-      const clamped = clamp(next, field.min, field.max);
+      const clamped = clamp(next, getFieldMin(field), field.max);
       getActiveParams()[field.key] = clamped;
       range.value = String(clamped);
       number.value = String(clamped);
@@ -1643,7 +1656,7 @@ function applyParams(partial, options = {}) {
     if (!Number.isFinite(numeric)) {
       continue;
     }
-    nextParams[field.key] = clamp(numeric, field.min, field.max);
+    nextParams[field.key] = clamp(numeric, getFieldMin(field), field.max);
   }
   syncControls();
   setDependentControlStates();
@@ -1655,12 +1668,15 @@ function applyParams(partial, options = {}) {
 }
 
 function buildChannelAxis(span, frame, capillary, wall, spacing) {
-  const interior = Math.max(span - frame * 2, 0.1);
-  const usableCapillary = clamp(capillary, 0.25, Math.max(0.25, interior - 0.36));
-  const usableWall = clamp(wall, 0.18, Math.max(0.18, (interior - usableCapillary) * 0.5));
-  const spacingValue = Math.max(0.2, spacing);
+  const interior = Math.max(span - frame * 2, 0);
+  const usableCapillary = clamp(capillary, 0, Math.max(0, interior));
+  const usableWall = clamp(wall, 0, Math.max(0, (interior - usableCapillary) * 0.5));
+  const spacingValue = Math.max(0, spacing);
   const envelope = usableCapillary + usableWall * 2;
-  const channelCount = Math.max(1, Math.floor((interior + spacingValue) / Math.max(envelope + spacingValue, 0.01)));
+  const channelCount =
+    interior <= 1e-6 || envelope <= 1e-6
+      ? 0
+      : Math.max(1, Math.floor((interior + spacingValue) / Math.max(envelope + spacingValue, 0.01)));
   const used = channelCount * envelope + Math.max(0, channelCount - 1) * spacingValue;
   const start = frame + Math.max(0, interior - used) * 0.5;
 
@@ -2633,15 +2649,15 @@ function buildMeanderSegments(params) {
 
 function buildMeanderDesign(inputParams) {
   const params = {
-    width: clamp(inputParams.width, 60, 220),
-    length: clamp(inputParams.length, 60, 220),
-    thickness: clamp(inputParams.thickness, 1.8, 8),
-    frame: clamp(inputParams.frame, 2, Math.min(inputParams.width, inputParams.length) * 0.24),
-    channel: clamp(inputParams.channel, 0.45, 2.4),
-    wall: clamp(inputParams.wall, 0.45, 2.2),
-    laneGap: clamp(inputParams.laneGap, 1, 18),
+    width: clamp(inputParams.width, 0, 220),
+    length: clamp(inputParams.length, 0, 220),
+    thickness: clamp(inputParams.thickness, 0, 8),
+    frame: clamp(inputParams.frame, 0, Math.min(inputParams.width, inputParams.length) * 0.24),
+    channel: clamp(inputParams.channel, 0, 2.4),
+    wall: clamp(inputParams.wall, 0, 2.2),
+    laneGap: clamp(inputParams.laneGap, 0, 18),
     pocket: Boolean(inputParams.pocket),
-    pocketDia: clamp(inputParams.pocketDia, 1.5, 8),
+    pocketDia: clamp(inputParams.pocketDia, 0, 8),
   };
 
   const meander = buildMeanderSegments(params);
@@ -2732,16 +2748,16 @@ function buildLeafNetwork(params) {
 
 function buildLeafDesign(inputParams) {
   const params = {
-    width: clamp(inputParams.width, 60, 220),
-    length: clamp(inputParams.length, 60, 220),
-    thickness: clamp(inputParams.thickness, 1.8, 8),
-    frame: clamp(inputParams.frame, 2, Math.min(inputParams.width, inputParams.length) * 0.24),
-    trunk: clamp(inputParams.trunk, 0.55, 2.8),
-    branch: clamp(inputParams.branch, 0.4, 2.2),
-    branchPitch: clamp(inputParams.branchPitch, 8, 28),
-    reach: clamp(inputParams.reach, 10, 48),
+    width: clamp(inputParams.width, 0, 220),
+    length: clamp(inputParams.length, 0, 220),
+    thickness: clamp(inputParams.thickness, 0, 8),
+    frame: clamp(inputParams.frame, 0, Math.min(inputParams.width, inputParams.length) * 0.24),
+    trunk: clamp(inputParams.trunk, 0, 2.8),
+    branch: clamp(inputParams.branch, 0, 2.2),
+    branchPitch: clamp(inputParams.branchPitch, 0, 28),
+    reach: clamp(inputParams.reach, 0, 48),
     pocket: Boolean(inputParams.pocket),
-    pocketDia: clamp(inputParams.pocketDia, 1.5, 10),
+    pocketDia: clamp(inputParams.pocketDia, 0, 10),
   };
 
   const network = buildLeafNetwork(params);
@@ -2800,7 +2816,7 @@ function buildPillarAxis(span, frame, diameter, gap) {
   const radius = diameter * 0.5;
   const minCenter = Math.min(span * 0.5, frame + radius);
   const maxCenter = Math.max(minCenter, span - frame - radius);
-  const pitch = Math.max(diameter + gap, diameter + 0.2);
+  const pitch = Math.max(diameter + gap, 0.1);
   const count = Math.max(1, Math.floor((maxCenter - minCenter) / Math.max(pitch, 0.1)) + 1);
   const used = Math.max(0, count - 1) * pitch;
   const start = minCenter + Math.max(0, maxCenter - minCenter - used) * 0.5;
@@ -2975,15 +2991,15 @@ function buildLadderTunnelSegments(layout, params) {
 
 function normalizePillarBaseParams(inputParams) {
   return {
-    width: clamp(inputParams.width, 60, 220),
-    length: clamp(inputParams.length, 60, 220),
-    thickness: clamp(inputParams.thickness, 2.4, 16),
-    frame: clamp(inputParams.frame, 2, Math.min(inputParams.width, inputParams.length) * 0.24),
-    capillaryDia: clamp(inputParams.capillaryDia, 0.45, 3.2),
-    xGap: clamp(inputParams.xGap, 0.8, 18),
-    yGap: clamp(inputParams.yGap, 0.8, 18),
-    cupDia: clamp(inputParams.cupDia, 1.6, 10),
-    cupDepth: clamp(inputParams.cupDepth, 0.1, 2.2),
+    width: clamp(inputParams.width, 0, 220),
+    length: clamp(inputParams.length, 0, 220),
+    thickness: clamp(inputParams.thickness, 0, 16),
+    frame: clamp(inputParams.frame, 0, Math.min(inputParams.width, inputParams.length) * 0.24),
+    capillaryDia: clamp(inputParams.capillaryDia, 0, 3.2),
+    xGap: clamp(inputParams.xGap, 0, 18),
+    yGap: clamp(inputParams.yGap, 0, 18),
+    cupDia: clamp(inputParams.cupDia, 0, 10),
+    cupDepth: clamp(inputParams.cupDepth, 0, 2.2),
   };
 }
 
@@ -3126,8 +3142,8 @@ function buildPillarDesign(inputParams) {
 function buildPillarZigzagDesign(inputParams) {
   const params = {
     ...normalizePillarBaseParams(inputParams),
-    tunnelDia: clamp(inputParams.tunnelDia, 0.5, 3.6),
-    tunnelLift: clamp(inputParams.tunnelLift, 0.25, 0.82),
+    tunnelDia: clamp(inputParams.tunnelDia, 0, 3.6),
+    tunnelLift: clamp(inputParams.tunnelLift, 0, 0.82),
   };
   const layout = buildRectPillarLayout(params);
   const tunnel = buildZigzagTunnelSegments(layout, params);
@@ -3144,8 +3160,8 @@ function buildPillarZigzagDesign(inputParams) {
 function buildPillarLadderDesign(inputParams) {
   const params = {
     ...normalizePillarBaseParams(inputParams),
-    tunnelDia: clamp(inputParams.tunnelDia, 0.5, 3.2),
-    tunnelLift: clamp(inputParams.tunnelLift, 0.42, 0.82),
+    tunnelDia: clamp(inputParams.tunnelDia, 0, 3.2),
+    tunnelLift: clamp(inputParams.tunnelLift, 0, 0.82),
   };
   const layout = buildRectPillarLayout(params);
   const tunnel = buildLadderTunnelSegments(layout, params);
@@ -3170,13 +3186,13 @@ function estimateGyroidResolution(params) {
 
 function buildGyroidDesign(inputParams) {
   const params = {
-    width: clamp(inputParams.width, 60, 220),
-    length: clamp(inputParams.length, 60, 220),
-    thickness: clamp(inputParams.thickness, 5, 20),
-    frame: clamp(inputParams.frame, 2, Math.min(inputParams.width, inputParams.length) * 0.24),
-    cell: clamp(inputParams.cell, 3.5, 18),
-    wall: clamp(inputParams.wall, 0.6, 2.8),
-    zStretch: clamp(inputParams.zStretch, 0.6, 1.8),
+    width: clamp(inputParams.width, 0, 220),
+    length: clamp(inputParams.length, 0, 220),
+    thickness: clamp(inputParams.thickness, 0, 20),
+    frame: clamp(inputParams.frame, 0, Math.min(inputParams.width, inputParams.length) * 0.24),
+    cell: clamp(inputParams.cell, 0, 18),
+    wall: clamp(inputParams.wall, 0, 2.8),
+    zStretch: clamp(inputParams.zStretch, 0, 1.8),
   };
 
   const resolution = estimateGyroidResolution(params);
@@ -3255,16 +3271,16 @@ function buildGyroidDesign(inputParams) {
 
 function buildMatDesign(inputParams) {
   const params = {
-    width: clamp(inputParams.width, 60, 220),
-    length: clamp(inputParams.length, 60, 220),
-    thickness: clamp(inputParams.thickness, 1.6, 8),
-    capillary: clamp(inputParams.capillary, 0.4, 2.4),
-    wall: clamp(inputParams.wall, 0.35, 2.2),
-    xSpacing: clamp(inputParams.xSpacing, 0.6, 16),
-    ySpacing: clamp(inputParams.ySpacing, 0.6, 16),
-    frame: clamp(inputParams.frame, 2, Math.min(inputParams.width, inputParams.length) * 0.24),
+    width: clamp(inputParams.width, 0, 220),
+    length: clamp(inputParams.length, 0, 220),
+    thickness: clamp(inputParams.thickness, 0, 8),
+    capillary: clamp(inputParams.capillary, 0, 2.4),
+    wall: clamp(inputParams.wall, 0, 2.2),
+    xSpacing: clamp(inputParams.xSpacing, 0, 16),
+    ySpacing: clamp(inputParams.ySpacing, 0, 16),
+    frame: clamp(inputParams.frame, 0, Math.min(inputParams.width, inputParams.length) * 0.24),
     dimple: Boolean(inputParams.dimple),
-    dimpleDepth: clamp(inputParams.dimpleDepth, 0.1, 1.2),
+    dimpleDepth: clamp(inputParams.dimpleDepth, 0, 1.2),
   };
 
   const resolution = estimateMatResolution(params);
@@ -3395,16 +3411,16 @@ function buildWickCenters(span, frame, pitch) {
 
 function buildSpongeDesign(inputParams) {
   const params = {
-    width: clamp(inputParams.width, 60, 220),
-    length: clamp(inputParams.length, 60, 220),
-    thickness: clamp(inputParams.thickness, 4, 18),
-    frame: clamp(inputParams.frame, 2, Math.min(inputParams.width, inputParams.length) * 0.24),
-    pore: clamp(inputParams.pore, 2.5, 12),
-    rib: clamp(inputParams.rib, 0.45, 1.8),
-    layers: Math.round(clamp(inputParams.layers, 2, 7)),
+    width: clamp(inputParams.width, 0, 220),
+    length: clamp(inputParams.length, 0, 220),
+    thickness: clamp(inputParams.thickness, 0, 18),
+    frame: clamp(inputParams.frame, 0, Math.min(inputParams.width, inputParams.length) * 0.24),
+    pore: clamp(inputParams.pore, 0, 12),
+    rib: clamp(inputParams.rib, 0, 1.8),
+    layers: Math.round(clamp(inputParams.layers, 0, 7)),
     stagger: clamp(inputParams.stagger, 0, 0.9),
-    wickWidth: clamp(inputParams.wickWidth, 0.45, 2.2),
-    wickPitch: clamp(inputParams.wickPitch, 6, 26),
+    wickWidth: clamp(inputParams.wickWidth, 0, 2.2),
+    wickPitch: clamp(inputParams.wickPitch, 0, 26),
   };
 
   const resolution = estimateSpongeResolution(params);
@@ -3612,15 +3628,21 @@ function updateGeometry(design) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(design.mesh.positions, 3));
   geometry.setAttribute("normal", new THREE.BufferAttribute(design.mesh.normals, 3));
-  geometry.computeBoundingSphere();
   state.geometry = geometry;
   matMesh.geometry = geometry;
 
-  const edgeGeometry = new THREE.EdgesGeometry(geometry, 26);
+  const edgeGeometry =
+    design.mesh.positions.length >= 9 ? new THREE.EdgesGeometry(geometry, 26) : new THREE.BufferGeometry();
   state.edgeGeometry = edgeGeometry;
   edgeLines.geometry = edgeGeometry;
 
-  const radius = geometry.boundingSphere ? geometry.boundingSphere.radius : 80;
+  let radius = 80;
+  if (design.mesh.positions.length >= 9) {
+    geometry.computeBoundingSphere();
+    if (geometry.boundingSphere && Number.isFinite(geometry.boundingSphere.radius)) {
+      radius = geometry.boundingSphere.radius;
+    }
+  }
   if (controls) {
     controls.target.set(0, 0, 0);
     controls.minDistance = Math.max(30, radius * 0.9);
