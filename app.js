@@ -1,65 +1,329 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-const DEFAULTS = {
-  width: 120,
-  length: 120,
-  thickness: 2.4,
-  pitch: 9,
-  gap: 0.9,
-  porosity: 0.68,
-  frame: 4.2,
+const MAT_FIELDS = [
+  { key: "width", label: "幅", unit: "mm", min: 60, max: 220, step: 2, precision: 0 },
+  { key: "length", label: "長さ", unit: "mm", min: 60, max: 220, step: 2, precision: 0 },
+  { key: "thickness", label: "厚み", unit: "mm", min: 1.6, max: 8, step: 0.1, precision: 2 },
+  {
+    key: "capillary",
+    label: "毛細管の空隙幅",
+    unit: "mm",
+    min: 0.4,
+    max: 2.4,
+    step: 0.05,
+    precision: 2,
+    help: "水を引き上げる細い列の内幅です。狭いほど毛細力は上がります。",
+  },
+  {
+    key: "wall",
+    label: "毛細管の壁厚",
+    unit: "mm",
+    min: 0.35,
+    max: 2.2,
+    step: 0.05,
+    precision: 2,
+    help: "空隙列の左右を囲う樹脂厚です。剛性と目詰まり耐性に効きます。",
+  },
+  {
+    key: "xSpacing",
+    label: "縦列どうしの距離",
+    unit: "mm",
+    min: 0.6,
+    max: 16,
+    step: 0.1,
+    precision: 2,
+    help: "縦方向の毛細管列どうしの間隔です。X 方向の密度を決めます。",
+  },
+  {
+    key: "ySpacing",
+    label: "横列どうしの距離",
+    unit: "mm",
+    min: 0.6,
+    max: 16,
+    step: 0.1,
+    precision: 2,
+    help: "横方向の毛細管列どうしの間隔です。Y 方向の密度を別で決められます。",
+  },
+  { key: "frame", label: "外周フレーム幅", unit: "mm", min: 2, max: 12, step: 0.2, precision: 2 },
+  {
+    key: "dimple",
+    label: "交点をディンプル状に凹ませる",
+    type: "toggle",
+    help: "交差部の上面を浅く凹ませて、播種位置のガイドにします。",
+  },
+  {
+    key: "dimpleDepth",
+    label: "ディンプル深さ",
+    unit: "mm",
+    min: 0.1,
+    max: 1.2,
+    step: 0.05,
+    precision: 2,
+    dependsOn: "dimple",
+  },
+];
+
+const SPONGE_FIELDS = [
+  { key: "width", label: "幅", unit: "mm", min: 60, max: 220, step: 2, precision: 0 },
+  { key: "length", label: "長さ", unit: "mm", min: 60, max: 220, step: 2, precision: 0 },
+  { key: "thickness", label: "厚み", unit: "mm", min: 4, max: 18, step: 0.2, precision: 2 },
+  { key: "frame", label: "外周フレーム幅", unit: "mm", min: 2, max: 12, step: 0.2, precision: 2 },
+  {
+    key: "pore",
+    label: "スポンジ胞の開口",
+    unit: "mm",
+    min: 2.5,
+    max: 12,
+    step: 0.1,
+    precision: 2,
+    help: "層状ラティスの開口です。大きいほど通気が増えます。",
+  },
+  {
+    key: "rib",
+    label: "層ラティスのリブ厚",
+    unit: "mm",
+    min: 0.45,
+    max: 1.8,
+    step: 0.05,
+    precision: 2,
+    help: "各層を構成する樹脂リブの太さです。",
+  },
+  {
+    key: "layers",
+    label: "積層レイヤー数",
+    unit: "count",
+    min: 2,
+    max: 7,
+    step: 1,
+    precision: 0,
+    help: "水平ラティス層の枚数です。多いほど 3D スポンジ感が増します。",
+  },
+  {
+    key: "stagger",
+    label: "層ごとのオフセット率",
+    unit: "ratio",
+    min: 0,
+    max: 0.9,
+    step: 0.05,
+    precision: 2,
+    help: "上下層をずらして、水と空気の経路に蛇行を作ります。",
+  },
+  {
+    key: "wickWidth",
+    label: "縦ウィック径",
+    unit: "mm",
+    min: 0.45,
+    max: 2.2,
+    step: 0.05,
+    precision: 2,
+    help: "下から上へ水を引き上げる縦方向の柱径です。",
+  },
+  {
+    key: "wickPitch",
+    label: "縦ウィック間隔",
+    unit: "mm",
+    min: 6,
+    max: 26,
+    step: 0.2,
+    precision: 2,
+    help: "縦ウィック柱の密度です。",
+  },
+];
+
+const MODELS = {
+  mat: {
+    id: "mat",
+    label: "Capillary Mat",
+    shortLabel: "平面マット",
+    eyebrow: "Realtime Preview",
+    title: "毛細管の内幅・壁厚・縦横密度を直接設計",
+    lead:
+      "空隙列の幅を毛細管として決め、その周囲の壁厚と縦横の配置密度を別々に指定します。交点ディンプルを入れると、播種位置を形状側で持てます。",
+    paramHint: "毛細管幅・壁厚・X/Y 密度を直接指定",
+    planTitle: "Top View",
+    planSubtitle: "毛細管列とディンプル配置",
+    noteSummary: "平面マット設計メモ",
+    noteCopy: [
+      "このモードは、細い毛細管列を縦横に組み合わせた平面マットです。列の内幅を先に決め、その外側に壁厚を付け、列どうしの距離を X/Y 別に指定します。",
+      "列の距離を広げると酸素が入りやすくなり、詰まりにも強くなりますが、マット全域へ水が回る速度は落ちます。逆に密度を上げると広がりは速い代わりに空気室が減ります。",
+      "交点ディンプルは、交差する壁の上面だけを浅く落とした播種ポケットです。種を置きやすいですが、深くしすぎると上面の厚みが減るので 0.3 - 0.6 mm 程度が扱いやすいです。",
+    ],
+    legend: [
+      { klass: "solid", label: "樹脂壁" },
+      { klass: "slot", label: "毛細管列" },
+      { klass: "chamber", label: "通気空間" },
+    ],
+    defaults: {
+      width: 120,
+      length: 120,
+      thickness: 2.6,
+      capillary: 0.9,
+      wall: 0.65,
+      xSpacing: 5.2,
+      ySpacing: 6.8,
+      frame: 4.2,
+      dimple: true,
+      dimpleDepth: 0.45,
+    },
+    presets: {
+      seedling: {
+        label: "Seedling",
+        params: {
+          width: 96,
+          length: 96,
+          thickness: 2.2,
+          capillary: 0.75,
+          wall: 0.58,
+          xSpacing: 4.1,
+          ySpacing: 4.8,
+          frame: 3.4,
+          dimple: true,
+          dimpleDepth: 0.35,
+        },
+      },
+      leafy: {
+        label: "Leafy Tray",
+        params: {
+          width: 140,
+          length: 110,
+          thickness: 2.8,
+          capillary: 0.95,
+          wall: 0.72,
+          xSpacing: 6.2,
+          ySpacing: 7.8,
+          frame: 4.6,
+          dimple: true,
+          dimpleDepth: 0.5,
+        },
+      },
+      orchid: {
+        label: "Orchid Wick",
+        params: {
+          width: 88,
+          length: 148,
+          thickness: 3.4,
+          capillary: 1.15,
+          wall: 0.85,
+          xSpacing: 7.6,
+          ySpacing: 9.2,
+          frame: 4.8,
+          dimple: false,
+          dimpleDepth: 0.4,
+        },
+      },
+    },
+    fields: MAT_FIELDS,
+    buildDesign: buildMatDesign,
+    drawPlan: drawMatPlan,
+    fileStem: "capillary-mat",
+  },
+  sponge: {
+    id: "sponge",
+    label: "Sponge Soil Beta",
+    shortLabel: "立体スポンジ案",
+    eyebrow: "Beta Concept",
+    title: "3D プリンタ向けの層状スポンジ毛細管土壌を検討",
+    lead:
+      "水平ラティス層を上下に積み、縦ウィック柱でつないだ試作案です。完全な土壌代替ではなく、立体的な保水・通気体としての検討タブです。",
+    paramHint: "層状ラティスと縦ウィックの構成を試作",
+    planTitle: "Layer Map",
+    planSubtitle: "最上層パターンと縦ウィック位置",
+    noteSummary: "立体スポンジ案メモ",
+    noteCopy: [
+      "この別タブは、3D プリントの積層を活かして平面ではなく層状の毛細管ネットワークを作る試作案です。各層の格子を少しずつずらし、縦ウィック柱で上下をつなぎます。",
+      "平面マットより保水体積を増やしつつ、層間空間で酸素を持たせる狙いです。播種床よりも、挿し木や発芽後の根域保持材として相性がよい構成です。",
+      "この案はまだ検討用ですが、STL 書き出しまでできます。実機ではサポート不要で出せるか、ブリッジ長と層板厚のバランスを見るのが重要です。",
+    ],
+    legend: [
+      { klass: "solid", label: "層ラティス" },
+      { klass: "slot", label: "縦ウィック" },
+      { klass: "chamber", label: "スポンジ空間" },
+    ],
+    defaults: {
+      width: 110,
+      length: 110,
+      thickness: 8.4,
+      frame: 4,
+      pore: 5.2,
+      rib: 0.85,
+      layers: 4,
+      stagger: 0.35,
+      wickWidth: 0.95,
+      wickPitch: 15.5,
+    },
+    presets: {
+      nursery: {
+        label: "Nursery Plug",
+        params: {
+          width: 84,
+          length: 84,
+          thickness: 6.8,
+          frame: 3.4,
+          pore: 4.1,
+          rib: 0.72,
+          layers: 4,
+          stagger: 0.28,
+          wickWidth: 0.85,
+          wickPitch: 12.6,
+        },
+      },
+      wickbed: {
+        label: "Wick Bed",
+        params: {
+          width: 136,
+          length: 108,
+          thickness: 10.2,
+          frame: 4.8,
+          pore: 6.4,
+          rib: 0.92,
+          layers: 5,
+          stagger: 0.4,
+          wickWidth: 1.05,
+          wickPitch: 17.8,
+        },
+      },
+      airy: {
+        label: "Airy Sponge",
+        params: {
+          width: 120,
+          length: 120,
+          thickness: 11.6,
+          frame: 4.2,
+          pore: 7.8,
+          rib: 0.78,
+          layers: 5,
+          stagger: 0.55,
+          wickWidth: 0.82,
+          wickPitch: 18.6,
+        },
+      },
+    },
+    fields: SPONGE_FIELDS,
+    buildDesign: buildSpongeDesign,
+    drawPlan: drawSpongePlan,
+    fileStem: "sponge-soil-beta",
+  },
 };
 
-const PRESETS = {
-  seedling: {
-    width: 96,
-    length: 96,
-    thickness: 2.1,
-    pitch: 7.2,
-    gap: 0.75,
-    porosity: 0.66,
-    frame: 3.6,
-  },
-  herb: {
-    width: 140,
-    length: 110,
-    thickness: 2.6,
-    pitch: 9.8,
-    gap: 1,
-    porosity: 0.7,
-    frame: 4.4,
-  },
-  orchid: {
-    width: 84,
-    length: 144,
-    thickness: 3.2,
-    pitch: 11.5,
-    gap: 1.25,
-    porosity: 0.74,
-    frame: 4.8,
-  },
-};
-
-const FIELD_IDS = ["width", "length", "thickness", "pitch", "gap", "porosity", "frame"];
-const FIELD_PRECISION = {
-  width: 0,
-  length: 0,
-  thickness: 2,
-  pitch: 2,
-  gap: 2,
-  porosity: 2,
-  frame: 2,
-};
+for (const model of Object.values(MODELS)) {
+  model.fieldMap = new Map(model.fields.map((field) => [field.key, field]));
+}
 
 const state = {
-  params: { ...DEFAULTS },
+  mode: "mat",
+  paramsByMode: Object.fromEntries(Object.values(MODELS).map((model) => [model.id, { ...model.defaults }])),
   currentDesign: null,
   geometry: null,
   edgeGeometry: null,
+  controlMap: new Map(),
 };
 
 const dom = {
+  modeTabs: document.querySelector("#modeTabs"),
+  presetGrid: document.querySelector("#presetGrid"),
+  paramHint: document.querySelector("#paramHint"),
+  controlFields: document.querySelector("#controlFields"),
   metricsGrid: document.querySelector("#metricsGrid"),
   warningList: document.querySelector("#warningList"),
   actionStatus: document.querySelector("#actionStatus"),
@@ -69,6 +333,14 @@ const dom = {
   meshInfo: document.querySelector("#meshInfo"),
   planCanvas: document.querySelector("#planCanvas"),
   viewerMount: document.querySelector("#viewerMount"),
+  noteSummary: document.querySelector("#noteSummary"),
+  noteCopy: document.querySelector("#noteCopy"),
+  heroEyebrow: document.querySelector("#heroEyebrow"),
+  heroTitle: document.querySelector("#heroTitle"),
+  heroLead: document.querySelector("#heroLead"),
+  legend: document.querySelector("#legend"),
+  planTitle: document.querySelector("#planTitle"),
+  planSubtitle: document.querySelector("#planSubtitle"),
 };
 
 const scene = new THREE.Scene();
@@ -104,7 +376,7 @@ scene.add(matMesh);
 
 const edgeLines = new THREE.LineSegments(
   new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
-  new THREE.LineBasicMaterial({ color: 0x1f5137, transparent: true, opacity: 0.3 })
+  new THREE.LineBasicMaterial({ color: 0x1f5137, transparent: true, opacity: 0.28 })
 );
 edgeLines.rotation.x = -Math.PI / 2;
 scene.add(edgeLines);
@@ -138,7 +410,6 @@ function initRenderer() {
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.shadowMap.enabled = false;
     dom.viewerMount.appendChild(renderer.domElement);
 
     controls = new OrbitControls(camera, renderer.domElement);
@@ -169,195 +440,11 @@ function formatValue(value, digits = 1) {
   return Number(value).toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
 }
 
-function toHash(params) {
-  const search = new URLSearchParams();
-  for (const key of FIELD_IDS) {
-    search.set(key, String(roundTo(params[key], FIELD_PRECISION[key])));
+function positiveModulo(value, modulus) {
+  if (!modulus) {
+    return 0;
   }
-  return `#${search.toString()}`;
-}
-
-function fromHash() {
-  const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";
-  if (!hash) {
-    return null;
-  }
-  const params = new URLSearchParams(hash);
-  const parsed = {};
-  for (const key of FIELD_IDS) {
-    const raw = params.get(key);
-    if (raw == null) {
-      continue;
-    }
-    const numeric = Number(raw);
-    if (Number.isFinite(numeric)) {
-      parsed[key] = numeric;
-    }
-  }
-  return Object.keys(parsed).length ? parsed : null;
-}
-
-function syncControls() {
-  for (const key of FIELD_IDS) {
-    const value = roundTo(state.params[key], FIELD_PRECISION[key]);
-    document.querySelector(`#${key}Range`).value = String(value);
-    document.querySelector(`#${key}Number`).value = String(value);
-  }
-}
-
-function getFieldConstraints(field) {
-  const range = document.querySelector(`#${field}Range`);
-  return {
-    min: Number(range.min),
-    max: Number(range.max),
-  };
-}
-
-function applyParams(partial) {
-  for (const key of FIELD_IDS) {
-    if (!(key in partial)) {
-      continue;
-    }
-    const nextValue = Number(partial[key]);
-    if (!Number.isFinite(nextValue)) {
-      continue;
-    }
-    const { min, max } = getFieldConstraints(key);
-    state.params[key] = clamp(nextValue, min, max);
-  }
-  syncControls();
-  renderAll();
-}
-
-function estimateResolution(params) {
-  const dominant = Math.max(params.width, params.length);
-  const dimensionCap = dominant / 320;
-  const featureCap = Math.min(params.gap / 3.2, params.pitch / 16, params.thickness / 2.2);
-  return clamp(Math.min(0.52, featureCap), Math.max(0.24, dimensionCap), 0.52);
-}
-
-function buildEdges(span, resolution) {
-  const count = Math.max(1, Math.ceil(span / resolution));
-  const edges = new Float32Array(count + 1);
-  for (let i = 0; i <= count; i += 1) {
-    edges[i] = Math.min(i * resolution, span);
-  }
-  return edges;
-}
-
-function markInterval(mask, edges, start, end) {
-  const clippedStart = clamp(start, 0, edges[edges.length - 1]);
-  const clippedEnd = clamp(end, 0, edges[edges.length - 1]);
-  if (clippedEnd <= clippedStart) {
-    return;
-  }
-  for (let i = 0; i < mask.length; i += 1) {
-    const cellStart = edges[i];
-    const cellEnd = edges[i + 1];
-    if (cellEnd <= clippedStart || cellStart >= clippedEnd) {
-      continue;
-    }
-    mask[i] = 1;
-  }
-}
-
-function mergeIntervals(intervals) {
-  if (!intervals.length) {
-    return [];
-  }
-  const sorted = intervals
-    .map(([start, end]) => [Math.min(start, end), Math.max(start, end)])
-    .sort((a, b) => a[0] - b[0]);
-
-  const merged = [sorted[0].slice()];
-  for (let i = 1; i < sorted.length; i += 1) {
-    const current = sorted[i];
-    const last = merged[merged.length - 1];
-    if (current[0] <= last[1] + 1e-6) {
-      last[1] = Math.max(last[1], current[1]);
-    } else {
-      merged.push(current.slice());
-    }
-  }
-  return merged;
-}
-
-function buildAxisStructure(span, resolution, frame, pitch, gap, wall) {
-  const edges = buildEdges(span, resolution);
-  const mask = new Uint8Array(edges.length - 1);
-  const solidIntervals = [];
-  const slotIntervals = [];
-
-  solidIntervals.push([0, frame], [span - frame, span]);
-
-  const interior = Math.max(span - frame * 2, 0);
-  const lineCount = Math.max(1, Math.floor(interior / pitch) + 1);
-  const used = (lineCount - 1) * pitch;
-  const start = frame + (interior - used) * 0.5;
-
-  for (let i = 0; i < lineCount; i += 1) {
-    const center = start + i * pitch;
-    slotIntervals.push([center - gap * 0.5, center + gap * 0.5]);
-    solidIntervals.push(
-      [center - gap * 0.5 - wall, center - gap * 0.5],
-      [center + gap * 0.5, center + gap * 0.5 + wall]
-    );
-  }
-
-  const mergedSolid = mergeIntervals(solidIntervals);
-  for (const [intervalStart, intervalEnd] of mergedSolid) {
-    markInterval(mask, edges, intervalStart, intervalEnd);
-  }
-
-  let solidCount = 0;
-  for (const flag of mask) {
-    solidCount += flag;
-  }
-
-  return {
-    edges,
-    mask,
-    solidIntervals: mergedSolid,
-    slotIntervals,
-    solidCount,
-    lineCount,
-  };
-}
-
-function evaluatePorosity(params, resolution, wall) {
-  const x = buildAxisStructure(params.width, resolution, params.frame, params.pitch, params.gap, wall);
-  const y = buildAxisStructure(params.length, resolution, params.frame, params.pitch, params.gap, wall);
-  const cellCount = x.mask.length * y.mask.length;
-  const solidCount = x.solidCount * y.mask.length + y.solidCount * x.mask.length - x.solidCount * y.solidCount;
-  return 1 - solidCount / Math.max(1, cellCount);
-}
-
-function solveWallThickness(params, resolution) {
-  const minWall = 0.5;
-  const maxWall = Math.max(minWall, (params.pitch - params.gap - 0.8) * 0.5);
-  const lowPorosity = evaluatePorosity(params, resolution, maxWall);
-  const highPorosity = evaluatePorosity(params, resolution, minWall);
-
-  if (params.porosity >= highPorosity) {
-    return { wall: minWall, targetReached: false };
-  }
-  if (params.porosity <= lowPorosity) {
-    return { wall: maxWall, targetReached: false };
-  }
-
-  let lo = minWall;
-  let hi = maxWall;
-  for (let i = 0; i < 22; i += 1) {
-    const mid = (lo + hi) * 0.5;
-    const porosity = evaluatePorosity(params, resolution, mid);
-    if (porosity > params.porosity) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-  }
-
-  return { wall: (lo + hi) * 0.5, targetReached: true };
+  return ((value % modulus) + modulus) % modulus;
 }
 
 function pushTriangle(positions, normals, faceNormals, a, b, c, normal) {
@@ -371,172 +458,569 @@ function pushQuad(positions, normals, faceNormals, points, normal) {
   pushTriangle(positions, normals, faceNormals, points[0], points[2], points[3], normal);
 }
 
-function buildMesh(xAxis, yAxis, thickness) {
+function buildEdges(span, resolution) {
+  const count = Math.max(1, Math.ceil(span / resolution));
+  const edges = new Float32Array(count + 1);
+  for (let index = 0; index <= count; index += 1) {
+    edges[index] = Math.min(index * resolution, span);
+  }
+  return edges;
+}
+
+function markInterval(mask, edges, start, end) {
+  const clippedStart = clamp(start, 0, edges[edges.length - 1]);
+  const clippedEnd = clamp(end, 0, edges[edges.length - 1]);
+  if (clippedEnd <= clippedStart) {
+    return;
+  }
+  for (let index = 0; index < mask.length; index += 1) {
+    const cellStart = edges[index];
+    const cellEnd = edges[index + 1];
+    if (cellEnd <= clippedStart || cellStart >= clippedEnd) {
+      continue;
+    }
+    mask[index] = 1;
+  }
+}
+
+function mergeIntervals(intervals) {
+  if (!intervals.length) {
+    return [];
+  }
+  const sorted = intervals
+    .map(([start, end]) => [Math.min(start, end), Math.max(start, end)])
+    .sort((a, b) => a[0] - b[0]);
+  const merged = [sorted[0].slice()];
+  for (let index = 1; index < sorted.length; index += 1) {
+    const current = sorted[index];
+    const last = merged[merged.length - 1];
+    if (current[0] <= last[1] + 1e-6) {
+      last[1] = Math.max(last[1], current[1]);
+    } else {
+      merged.push(current.slice());
+    }
+  }
+  return merged;
+}
+
+function getModel() {
+  return MODELS[state.mode];
+}
+
+function getActiveParams() {
+  return state.paramsByMode[state.mode];
+}
+
+function parseFieldValue(field, raw) {
+  if (field.type === "toggle") {
+    return raw === "1" || raw === "true";
+  }
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function toHash() {
+  const model = getModel();
+  const search = new URLSearchParams();
+  search.set("mode", model.id);
+  for (const field of model.fields) {
+    const value = getActiveParams()[field.key];
+    if (field.type === "toggle") {
+      search.set(field.key, value ? "1" : "0");
+    } else {
+      search.set(field.key, String(roundTo(value, field.precision != null ? field.precision : 2)));
+    }
+  }
+  return `#${search.toString()}`;
+}
+
+function fromHash() {
+  const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";
+  if (!hash) {
+    return null;
+  }
+  const params = new URLSearchParams(hash);
+  const mode = params.get("mode");
+  const model = MODELS[mode] || MODELS.mat;
+  const parsed = {};
+  for (const field of model.fields) {
+    const raw = params.get(field.key);
+    if (raw == null) {
+      continue;
+    }
+    const value = parseFieldValue(field, raw);
+    if (value == null) {
+      continue;
+    }
+    parsed[field.key] = value;
+  }
+  return { mode: model.id, params: parsed };
+}
+
+function renderModeTabs() {
+  dom.modeTabs.innerHTML = Object.values(MODELS)
+    .map(
+      (model) => `
+        <button
+          type="button"
+          class="mode-tab ${model.id === state.mode ? "is-active" : ""}"
+          data-mode="${model.id}"
+        >
+          <span>${model.shortLabel}</span>
+          <small>${model.label}</small>
+        </button>
+      `
+    )
+    .join("");
+
+  for (const button of dom.modeTabs.querySelectorAll("[data-mode]")) {
+    button.addEventListener("click", () => {
+      if (button.dataset.mode === state.mode) {
+        return;
+      }
+      state.mode = button.dataset.mode;
+      renderModeUi();
+      renderAll();
+      dom.actionStatus.textContent = `${getModel().shortLabel} モードへ切り替えました。`;
+    });
+  }
+}
+
+function renderPresets() {
+  const model = getModel();
+  dom.presetGrid.innerHTML = Object.entries(model.presets)
+    .map(
+      ([presetKey, preset]) => `
+        <button type="button" class="preset-btn" data-preset="${presetKey}">
+          ${preset.label}
+        </button>
+      `
+    )
+    .join("");
+
+  for (const button of dom.presetGrid.querySelectorAll("[data-preset]")) {
+    button.addEventListener("click", () => {
+      const preset = model.presets[button.dataset.preset];
+      applyParams(preset.params);
+      dom.actionStatus.textContent = `${preset.label} preset を適用しました。`;
+    });
+  }
+}
+
+function renderLegend() {
+  dom.legend.innerHTML = getModel().legend
+    .map(({ klass, label }) => `<span><i class="swatch ${klass}"></i>${label}</span>`)
+    .join("");
+}
+
+function renderNotes() {
+  const model = getModel();
+  dom.noteSummary.textContent = model.noteSummary;
+  dom.noteCopy.innerHTML = model.noteCopy.map((paragraph) => `<p>${paragraph}</p>`).join("");
+}
+
+function renderHero() {
+  const model = getModel();
+  dom.heroEyebrow.textContent = model.eyebrow;
+  dom.heroTitle.textContent = model.title;
+  dom.heroLead.textContent = model.lead;
+  dom.paramHint.textContent = model.paramHint;
+  dom.planTitle.textContent = model.planTitle;
+  dom.planSubtitle.textContent = model.planSubtitle;
+}
+
+function controlId(fieldKey, suffix) {
+  return `${state.mode}-${fieldKey}-${suffix}`;
+}
+
+function renderControls() {
+  const model = getModel();
+  state.controlMap = new Map();
+
+  dom.controlFields.innerHTML = model.fields
+    .map((field) => {
+      if (field.type === "toggle") {
+        return `
+          <label class="toggle-control control" data-control="${field.key}">
+            <div class="toggle-copy">
+              <div class="control-head">
+                <span>${field.label}</span>
+                <span class="unit">on / off</span>
+              </div>
+              ${field.help ? `<p class="control-copy">${field.help}</p>` : ""}
+            </div>
+            <input id="${controlId(field.key, "toggle")}" type="checkbox" />
+          </label>
+        `;
+      }
+
+      return `
+        <label class="control" data-control="${field.key}">
+          <div class="control-head">
+            <span>${field.label}</span>
+            <span class="unit">${field.unit}</span>
+          </div>
+          <div class="control-inputs">
+            <input
+              id="${controlId(field.key, "range")}"
+              type="range"
+              min="${field.min}"
+              max="${field.max}"
+              step="${field.step}"
+            />
+            <input
+              id="${controlId(field.key, "number")}"
+              type="number"
+              min="${field.min}"
+              max="${field.max}"
+              step="${field.step}"
+            />
+          </div>
+          ${field.help ? `<p class="control-copy">${field.help}</p>` : ""}
+        </label>
+      `;
+    })
+    .join("");
+
+  for (const field of model.fields) {
+    if (field.type === "toggle") {
+      const toggle = document.querySelector(`#${controlId(field.key, "toggle")}`);
+      toggle.addEventListener("input", () => {
+        getActiveParams()[field.key] = toggle.checked;
+        setDependentControlStates();
+        renderAll();
+      });
+      state.controlMap.set(field.key, { field, toggle, root: toggle.closest("[data-control]") });
+      continue;
+    }
+
+    const range = document.querySelector(`#${controlId(field.key, "range")}`);
+    const number = document.querySelector(`#${controlId(field.key, "number")}`);
+    const handleInput = (event) => {
+      const next = Number(event.target.value);
+      if (!Number.isFinite(next)) {
+        return;
+      }
+      getActiveParams()[field.key] = next;
+      range.value = String(next);
+      number.value = String(next);
+      renderAll();
+    };
+    range.addEventListener("input", handleInput);
+    number.addEventListener("input", handleInput);
+    state.controlMap.set(field.key, { field, range, number, root: range.closest("[data-control]") });
+  }
+
+  syncControls();
+  setDependentControlStates();
+}
+
+function renderModeUi() {
+  renderModeTabs();
+  renderPresets();
+  renderHero();
+  renderLegend();
+  renderControls();
+  renderNotes();
+}
+
+function syncControls() {
+  const params = getActiveParams();
+  for (const [key, controlsForField] of state.controlMap) {
+    const field = controlsForField.field;
+    if (field.type === "toggle") {
+      controlsForField.toggle.checked = Boolean(params[key]);
+      continue;
+    }
+    const value = roundTo(params[key], field.precision != null ? field.precision : 2);
+    controlsForField.range.value = String(value);
+    controlsForField.number.value = String(value);
+  }
+}
+
+function setDependentControlStates() {
+  const params = getActiveParams();
+  for (const controlsForField of state.controlMap.values()) {
+    const { field, root } = controlsForField;
+    if (!field.dependsOn) {
+      continue;
+    }
+    const enabled = Boolean(params[field.dependsOn]);
+    root.classList.toggle("is-disabled", !enabled);
+    if (controlsForField.range) {
+      controlsForField.range.disabled = !enabled;
+      controlsForField.number.disabled = !enabled;
+    }
+  }
+}
+
+function applyParams(partial) {
+  const model = getModel();
+  const nextParams = getActiveParams();
+  for (const field of model.fields) {
+    if (!(field.key in partial)) {
+      continue;
+    }
+    if (field.type === "toggle") {
+      nextParams[field.key] = Boolean(partial[field.key]);
+      continue;
+    }
+    const numeric = Number(partial[field.key]);
+    if (!Number.isFinite(numeric)) {
+      continue;
+    }
+    nextParams[field.key] = clamp(numeric, field.min, field.max);
+  }
+  syncControls();
+  setDependentControlStates();
+  renderAll();
+}
+
+function buildChannelAxis(span, resolution, frame, capillary, wall, spacing) {
+  const edges = buildEdges(span, resolution);
+  const mask = new Uint8Array(edges.length - 1);
+  const interior = Math.max(span - frame * 2, 0.1);
+  const usableCapillary = clamp(capillary, 0.25, Math.max(0.25, interior - 0.36));
+  const usableWall = clamp(wall, 0.18, Math.max(0.18, (interior - usableCapillary) * 0.5));
+  const spacingValue = Math.max(0.2, spacing);
+  const envelope = usableCapillary + usableWall * 2;
+  const channelCount = Math.max(1, Math.floor((interior + spacingValue) / Math.max(envelope + spacingValue, 0.01)));
+  const used = channelCount * envelope + Math.max(0, channelCount - 1) * spacingValue;
+  const start = frame + Math.max(0, interior - used) * 0.5;
+
+  const slotIntervals = [];
+  const wallIntervals = [];
+  const solidIntervals = [
+    [0, frame],
+    [span - frame, span],
+  ];
+  const channelCenters = [];
+
+  let cursor = start;
+  for (let index = 0; index < channelCount; index += 1) {
+    const leftWallStart = cursor;
+    const slotStart = leftWallStart + usableWall;
+    const slotEnd = slotStart + usableCapillary;
+    const rightWallEnd = slotEnd + usableWall;
+    slotIntervals.push([slotStart, slotEnd]);
+    wallIntervals.push([leftWallStart, slotStart], [slotEnd, rightWallEnd]);
+    solidIntervals.push([leftWallStart, slotStart], [slotEnd, rightWallEnd]);
+    channelCenters.push(slotStart + usableCapillary * 0.5);
+    cursor += envelope + spacingValue;
+  }
+
+  const mergedSolid = mergeIntervals(solidIntervals);
+  for (const [intervalStart, intervalEnd] of mergedSolid) {
+    markInterval(mask, edges, intervalStart, intervalEnd);
+  }
+
+  return {
+    edges,
+    mask,
+    slotIntervals,
+    wallIntervals: mergeIntervals(wallIntervals),
+    solidIntervals: mergedSolid,
+    channelCenters,
+    lineCount: channelCount,
+    effectiveCapillary: usableCapillary,
+    effectiveWall: usableWall,
+    pitch: envelope + spacingValue,
+  };
+}
+
+function estimateMatResolution(params) {
+  const dominant = Math.max(params.width, params.length);
+  const detail = Math.min(
+    params.capillary * 0.45,
+    params.wall * 0.7,
+    params.xSpacing * 0.45,
+    params.ySpacing * 0.45,
+    params.thickness * 0.32
+  );
+  return clamp(detail, Math.max(0.24, dominant / 250), 0.68);
+}
+
+function estimateSpongeResolution(params) {
+  const dominant = Math.max(params.width, params.length);
+  const detail = Math.min(
+    params.rib * 0.9,
+    params.wickWidth * 0.75,
+    params.pore * 0.28,
+    params.thickness / Math.max(8, params.layers * 2.2)
+  );
+  return clamp(detail, Math.max(0.28, dominant / 220), 0.74);
+}
+
+function buildZEdges(thickness, xyResolution) {
+  const zResolution = clamp(Math.min(xyResolution, thickness / 8.5), 0.18, 0.48);
+  return buildEdges(thickness, zResolution);
+}
+
+function nearestDistance(centers, value) {
+  let best = Infinity;
+  for (const center of centers) {
+    best = Math.min(best, Math.abs(center - value));
+  }
+  return best;
+}
+
+function buildOccupancyFromTopHeights(xEdges, yEdges, zEdges, solidMask, topHeights) {
+  const nx = xEdges.length - 1;
+  const ny = yEdges.length - 1;
+  const nz = zEdges.length - 1;
+  const occupancy = new Uint8Array(nx * ny * nz);
+  const zCenters = new Float32Array(nz);
+  for (let iz = 0; iz < nz; iz += 1) {
+    zCenters[iz] = (zEdges[iz] + zEdges[iz + 1]) * 0.5;
+  }
+
+  let occupiedCount = 0;
+  for (let iy = 0; iy < ny; iy += 1) {
+    for (let ix = 0; ix < nx; ix += 1) {
+      const flatIndex = ix + iy * nx;
+      if (!solidMask[flatIndex]) {
+        continue;
+      }
+      const topHeight = topHeights[flatIndex];
+      for (let iz = 0; iz < nz; iz += 1) {
+        if (zCenters[iz] > topHeight + 1e-6) {
+          continue;
+        }
+        occupancy[ix + nx * (iy + ny * iz)] = 1;
+        occupiedCount += 1;
+      }
+    }
+  }
+
+  const voxelVolume =
+    (xEdges[1] - xEdges[0]) *
+    (yEdges[1] - yEdges[0]) *
+    (zEdges[1] - zEdges[0]);
+
+  return { occupancy, occupiedCount, voxelVolume };
+}
+
+function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
+  const nx = xEdges.length - 1;
+  const ny = yEdges.length - 1;
+  const nz = zEdges.length - 1;
   const positions = [];
   const normals = [];
   const faceNormals = [];
-  const nx = xAxis.mask.length;
-  const ny = yAxis.mask.length;
-  const xOffset = xAxis.edges[xAxis.edges.length - 1] * 0.5;
-  const yOffset = yAxis.edges[yAxis.edges.length - 1] * 0.5;
-  const zMin = -thickness * 0.5;
-  const zMax = thickness * 0.5;
+  const xOffset = xEdges[nx] * 0.5;
+  const yOffset = yEdges[ny] * 0.5;
+  const zOffset = zEdges[nz] * 0.5;
 
-  const solidAt = (ix, iy) => {
-    if (ix < 0 || ix >= nx || iy < 0 || iy >= ny) {
+  const solidAt = (ix, iy, iz) => {
+    if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) {
       return 0;
     }
-    return xAxis.mask[ix] || yAxis.mask[iy];
+    return occupancy[ix + nx * (iy + ny * iz)];
   };
 
-  for (let iy = 0; iy < ny; iy += 1) {
-    let ix = 0;
-    while (ix < nx) {
-      while (ix < nx && !solidAt(ix, iy)) {
-        ix += 1;
-      }
-      if (ix >= nx) {
-        break;
-      }
-      const start = ix;
-      while (ix < nx && solidAt(ix, iy)) {
-        ix += 1;
-      }
-      const x1 = xAxis.edges[start] - xOffset;
-      const x2 = xAxis.edges[ix] - xOffset;
-      const y1 = yAxis.edges[iy] - yOffset;
-      const y2 = yAxis.edges[iy + 1] - yOffset;
-      pushQuad(
-        positions,
-        normals,
-        faceNormals,
-        [
-          [x1, y1, zMax],
-          [x2, y1, zMax],
-          [x2, y2, zMax],
-          [x1, y2, zMax],
-        ],
-        [0, 0, 1]
-      );
-      pushQuad(
-        positions,
-        normals,
-        faceNormals,
-        [
-          [x1, y1, zMin],
-          [x1, y2, zMin],
-          [x2, y2, zMin],
-          [x2, y1, zMin],
-        ],
-        [0, 0, -1]
-      );
-    }
-  }
-
-  for (let ix = 0; ix <= nx; ix += 1) {
-    let iy = 0;
-    while (iy < ny) {
-      const left = solidAt(ix - 1, iy);
-      const right = solidAt(ix, iy);
-      const direction = left === right ? 0 : left ? 1 : -1;
-      if (!direction) {
-        iy += 1;
-        continue;
-      }
-      const start = iy;
-      iy += 1;
-      while (iy < ny) {
-        const nextLeft = solidAt(ix - 1, iy);
-        const nextRight = solidAt(ix, iy);
-        const nextDirection = nextLeft === nextRight ? 0 : nextLeft ? 1 : -1;
-        if (nextDirection !== direction) {
-          break;
+  for (let iz = 0; iz < nz; iz += 1) {
+    for (let iy = 0; iy < ny; iy += 1) {
+      for (let ix = 0; ix < nx; ix += 1) {
+        if (!solidAt(ix, iy, iz)) {
+          continue;
         }
-        iy += 1;
-      }
-      const x = xAxis.edges[ix] - xOffset;
-      const y1 = yAxis.edges[start] - yOffset;
-      const y2 = yAxis.edges[iy] - yOffset;
-      if (direction > 0) {
-        pushQuad(
-          positions,
-          normals,
-          faceNormals,
-          [
-            [x, y1, zMin],
-            [x, y2, zMin],
-            [x, y2, zMax],
-            [x, y1, zMax],
-          ],
-          [1, 0, 0]
-        );
-      } else {
-        pushQuad(
-          positions,
-          normals,
-          faceNormals,
-          [
-            [x, y1, zMin],
-            [x, y1, zMax],
-            [x, y2, zMax],
-            [x, y2, zMin],
-          ],
-          [-1, 0, 0]
-        );
-      }
-    }
-  }
 
-  for (let iy = 0; iy <= ny; iy += 1) {
-    let ix = 0;
-    while (ix < nx) {
-      const bottom = solidAt(ix, iy - 1);
-      const top = solidAt(ix, iy);
-      const direction = bottom === top ? 0 : bottom ? 1 : -1;
-      if (!direction) {
-        ix += 1;
-        continue;
-      }
-      const start = ix;
-      ix += 1;
-      while (ix < nx) {
-        const nextBottom = solidAt(ix, iy - 1);
-        const nextTop = solidAt(ix, iy);
-        const nextDirection = nextBottom === nextTop ? 0 : nextBottom ? 1 : -1;
-        if (nextDirection !== direction) {
-          break;
+        const x1 = xEdges[ix] - xOffset;
+        const x2 = xEdges[ix + 1] - xOffset;
+        const y1 = yEdges[iy] - yOffset;
+        const y2 = yEdges[iy + 1] - yOffset;
+        const z1 = zEdges[iz] - zOffset;
+        const z2 = zEdges[iz + 1] - zOffset;
+
+        if (!solidAt(ix, iy, iz + 1)) {
+          pushQuad(
+            positions,
+            normals,
+            faceNormals,
+            [
+              [x1, y1, z2],
+              [x2, y1, z2],
+              [x2, y2, z2],
+              [x1, y2, z2],
+            ],
+            [0, 0, 1]
+          );
         }
-        ix += 1;
-      }
-      const y = yAxis.edges[iy] - yOffset;
-      const x1 = xAxis.edges[start] - xOffset;
-      const x2 = xAxis.edges[ix] - xOffset;
-      if (direction > 0) {
-        pushQuad(
-          positions,
-          normals,
-          faceNormals,
-          [
-            [x1, y, zMin],
-            [x1, y, zMax],
-            [x2, y, zMax],
-            [x2, y, zMin],
-          ],
-          [0, 1, 0]
-        );
-      } else {
-        pushQuad(
-          positions,
-          normals,
-          faceNormals,
-          [
-            [x1, y, zMin],
-            [x2, y, zMin],
-            [x2, y, zMax],
-            [x1, y, zMax],
-          ],
-          [0, -1, 0]
-        );
+
+        if (!solidAt(ix, iy, iz - 1)) {
+          pushQuad(
+            positions,
+            normals,
+            faceNormals,
+            [
+              [x1, y1, z1],
+              [x1, y2, z1],
+              [x2, y2, z1],
+              [x2, y1, z1],
+            ],
+            [0, 0, -1]
+          );
+        }
+
+        if (!solidAt(ix + 1, iy, iz)) {
+          pushQuad(
+            positions,
+            normals,
+            faceNormals,
+            [
+              [x2, y1, z1],
+              [x2, y1, z2],
+              [x2, y2, z2],
+              [x2, y2, z1],
+            ],
+            [1, 0, 0]
+          );
+        }
+
+        if (!solidAt(ix - 1, iy, iz)) {
+          pushQuad(
+            positions,
+            normals,
+            faceNormals,
+            [
+              [x1, y1, z1],
+              [x1, y2, z1],
+              [x1, y2, z2],
+              [x1, y1, z2],
+            ],
+            [-1, 0, 0]
+          );
+        }
+
+        if (!solidAt(ix, iy + 1, iz)) {
+          pushQuad(
+            positions,
+            normals,
+            faceNormals,
+            [
+              [x1, y2, z1],
+              [x2, y2, z1],
+              [x2, y2, z2],
+              [x1, y2, z2],
+            ],
+            [0, 1, 0]
+          );
+        }
+
+        if (!solidAt(ix, iy - 1, iz)) {
+          pushQuad(
+            positions,
+            normals,
+            faceNormals,
+            [
+              [x1, y1, z1],
+              [x1, y1, z2],
+              [x2, y1, z2],
+              [x2, y1, z1],
+            ],
+            [0, -1, 0]
+          );
+        }
       }
     }
   }
@@ -549,82 +1033,288 @@ function buildMesh(xAxis, yAxis, thickness) {
   };
 }
 
-function buildDesign(params) {
-  const normalized = { ...params };
-  normalized.pitch = Math.max(normalized.pitch, normalized.gap + 1.8);
-  normalized.frame = Math.min(normalized.frame, Math.min(normalized.width, normalized.length) * 0.2);
+function buildMatDesign(inputParams) {
+  const params = {
+    width: clamp(inputParams.width, 60, 220),
+    length: clamp(inputParams.length, 60, 220),
+    thickness: clamp(inputParams.thickness, 1.6, 8),
+    capillary: clamp(inputParams.capillary, 0.4, 2.4),
+    wall: clamp(inputParams.wall, 0.35, 2.2),
+    xSpacing: clamp(inputParams.xSpacing, 0.6, 16),
+    ySpacing: clamp(inputParams.ySpacing, 0.6, 16),
+    frame: clamp(inputParams.frame, 2, Math.min(inputParams.width, inputParams.length) * 0.24),
+    dimple: Boolean(inputParams.dimple),
+    dimpleDepth: clamp(inputParams.dimpleDepth, 0.1, 1.2),
+  };
 
-  const resolution = estimateResolution(normalized);
-  const wallSolution = solveWallThickness(normalized, resolution);
-  const wall = wallSolution.wall;
+  const resolution = estimateMatResolution(params);
+  const xAxis = buildChannelAxis(params.width, resolution, params.frame, params.capillary, params.wall, params.xSpacing);
+  const yAxis = buildChannelAxis(params.length, resolution, params.frame, params.capillary, params.wall, params.ySpacing);
+  const nx = xAxis.mask.length;
+  const ny = yAxis.mask.length;
+  const solidMask = new Uint8Array(nx * ny);
+  const topHeights = new Float32Array(nx * ny);
+  const dimpleDepth = params.dimple ? Math.min(params.dimpleDepth, params.thickness * 0.58) : 0;
+  const dimpleRadius = Math.max(
+    Math.min((params.capillary + params.wall * 2) * 0.72, Math.min(xAxis.pitch, yAxis.pitch) * 0.42),
+    resolution * 1.6
+  );
 
-  const xAxis = buildAxisStructure(normalized.width, resolution, normalized.frame, normalized.pitch, normalized.gap, wall);
-  const yAxis = buildAxisStructure(normalized.length, resolution, normalized.frame, normalized.pitch, normalized.gap, wall);
-  const cellCount = xAxis.mask.length * yAxis.mask.length;
-  const solidCount = xAxis.solidCount * yAxis.mask.length + yAxis.solidCount * xAxis.mask.length - xAxis.solidCount * yAxis.solidCount;
-  const porosity = 1 - solidCount / Math.max(1, cellCount);
-  const chamber = Math.max(normalized.pitch - normalized.gap - wall * 2, 0);
-  const mesh = buildMesh(xAxis, yAxis, normalized.thickness);
-  const solidArea = normalized.width * normalized.length * (1 - porosity);
-  const volumeMm3 = solidArea * normalized.thickness;
-  const massGram = volumeMm3 * 0.00124;
-  const wettedPerimeter = (xAxis.lineCount * normalized.length + yAxis.lineCount * normalized.width) * 2;
-  const wetIndex = wettedPerimeter / Math.max(1, normalized.width * normalized.length);
+  for (let iy = 0; iy < ny; iy += 1) {
+    const yCenter = (yAxis.edges[iy] + yAxis.edges[iy + 1]) * 0.5;
+    for (let ix = 0; ix < nx; ix += 1) {
+      const isSolid = xAxis.mask[ix] || yAxis.mask[iy];
+      if (!isSolid) {
+        continue;
+      }
+      const xCenter = (xAxis.edges[ix] + xAxis.edges[ix + 1]) * 0.5;
+      const flatIndex = ix + iy * nx;
+      solidMask[flatIndex] = 1;
+      let topHeight = params.thickness;
+      if (dimpleDepth > 0) {
+        const dx = nearestDistance(xAxis.channelCenters, xCenter);
+        const dy = nearestDistance(yAxis.channelCenters, yCenter);
+        const distance = Math.hypot(dx, dy);
+        if (distance < dimpleRadius) {
+          const weight = 1 - distance / dimpleRadius;
+          topHeight -= dimpleDepth * weight * weight;
+        }
+      }
+      topHeights[flatIndex] = Math.max(params.thickness * 0.28, topHeight);
+    }
+  }
+
+  const zEdges = buildZEdges(params.thickness, resolution);
+  const occupancyData = buildOccupancyFromTopHeights(xAxis.edges, yAxis.edges, zEdges, solidMask, topHeights);
+  const mesh = buildVoxelMesh(xAxis.edges, yAxis.edges, zEdges, occupancyData.occupancy);
+  const totalVolume = params.width * params.length * params.thickness;
+  const solidVolume = occupancyData.occupiedCount * occupancyData.voxelVolume;
+  const porosity = clamp(1 - solidVolume / Math.max(totalVolume, 1), 0, 0.98);
+  const massGram = solidVolume * 0.00124;
 
   const warnings = [];
-  if (normalized.gap > 1.3) {
-    warnings.push("毛細管スリットが広めです。給水を優先するなら 0.7 - 1.1 mm 側が安定しやすいです。");
+  if (xAxis.effectiveWall + 1e-6 < params.wall || yAxis.effectiveWall + 1e-6 < params.wall) {
+    warnings.push("指定壁厚が内側に収まらないため、一部の列では実壁厚を自動で絞っています。");
   }
-  if (wall < 0.55) {
-    warnings.push("壁厚がかなり薄いです。0.4 mm ノズルでは積層条件を詰めないと欠けやすくなります。");
+  if (params.capillary > 1.25) {
+    warnings.push("毛細管の空隙幅が広めです。吸い上げを優先するなら 0.7 - 1.1 mm 側が安定しやすいです。");
   }
-  if (chamber < 1.2) {
-    warnings.push("通気チャンバーが狭めです。根の酸素確保を重視するならピッチを上げるか空隙率を上げてください。");
+  if (params.xSpacing < 2 || params.ySpacing < 2) {
+    warnings.push("列どうしの距離がかなり狭く、通気余地が減ります。根域の酸素確保を重視するなら間隔を少し広げてください。");
   }
-  if (normalized.thickness < 1.7) {
-    warnings.push("厚みが薄く、反りや座屈が出やすい構成です。大きいサイズでは 2 mm 以上が無難です。");
+  if (dimpleDepth > params.thickness * 0.28) {
+    warnings.push("ディンプルが深めで、交点上面が薄くなっています。0.3 - 0.6 mm あたりが実用域です。");
   }
-  if (!wallSolution.targetReached) {
-    warnings.push("指定した空隙率はこのピッチとスリット径では厳しいため、壁厚を制約内で近い値に寄せています。");
+  if (porosity > 0.82) {
+    warnings.push("空隙率が高く、薄肉部が多い構成です。大判サイズでは反りや欠けが出やすくなります。");
   }
   if (!warnings.length) {
-    warnings.push("この構成なら、毛細管と通気のバランスは比較的良好です。まずは低速で 1 枚試作すると挙動を掴みやすいです。");
+    warnings.push("この構成なら、毛細管列と通気空間のバランスは比較的取りやすいです。まずは 1 枚試作して濡れ上がり速度を見てください。");
   }
 
   return {
-    params: normalized,
+    mode: "mat",
+    params,
     resolution,
-    wall,
-    porosity,
-    chamber,
     mesh,
     xAxis,
     yAxis,
-    metrics: {
-      wall,
-      porosity,
-      chamber,
-      xChannels: xAxis.lineCount,
-      yChannels: yAxis.lineCount,
-      wetIndex,
-      massGram,
-      triangleCount: mesh.triangleCount,
-    },
+    dimpleRadius,
+    metricCards: [
+      { label: "毛細管内幅", value: `${formatValue((xAxis.effectiveCapillary + yAxis.effectiveCapillary) * 0.5, 2)} mm` },
+      { label: "実壁厚", value: `${formatValue((xAxis.effectiveWall + yAxis.effectiveWall) * 0.5, 2)} mm` },
+      { label: "列本数", value: `${xAxis.lineCount} × ${yAxis.lineCount}` },
+      { label: "列間距離", value: `X ${formatValue(params.xSpacing, 1)} / Y ${formatValue(params.ySpacing, 1)} mm` },
+      { label: "実空隙率", value: `${formatValue(porosity * 100, 1)} %` },
+      { label: "概算質量", value: `${formatValue(massGram, 1)} g` },
+    ],
+    warnings,
+  };
+}
+
+function buildRepeatingIntervals(span, frame, module, width, offset) {
+  const intervals = [];
+  let cursor = frame - positiveModulo(offset, module);
+  while (cursor < span - frame + module) {
+    intervals.push([cursor, cursor + width]);
+    cursor += module;
+  }
+  return mergeIntervals(
+    intervals
+      .map(([start, end]) => [Math.max(frame, start), Math.min(span - frame, end)])
+      .filter(([start, end]) => end > start)
+  );
+}
+
+function buildWickCenters(span, frame, pitch) {
+  const interior = Math.max(span - frame * 2, 0.1);
+  const count = Math.max(1, Math.floor((interior + pitch * 0.35) / Math.max(pitch, 0.1)));
+  const used = Math.max(0, count - 1) * pitch;
+  const start = frame + Math.max(0, interior - used) * 0.5;
+  return Array.from({ length: count }, (_, index) => start + index * pitch);
+}
+
+function buildSpongeDesign(inputParams) {
+  const params = {
+    width: clamp(inputParams.width, 60, 220),
+    length: clamp(inputParams.length, 60, 220),
+    thickness: clamp(inputParams.thickness, 4, 18),
+    frame: clamp(inputParams.frame, 2, Math.min(inputParams.width, inputParams.length) * 0.24),
+    pore: clamp(inputParams.pore, 2.5, 12),
+    rib: clamp(inputParams.rib, 0.45, 1.8),
+    layers: Math.round(clamp(inputParams.layers, 2, 7)),
+    stagger: clamp(inputParams.stagger, 0, 0.9),
+    wickWidth: clamp(inputParams.wickWidth, 0.45, 2.2),
+    wickPitch: clamp(inputParams.wickPitch, 6, 26),
+  };
+
+  const resolution = estimateSpongeResolution(params);
+  const xEdges = buildEdges(params.width, resolution);
+  const yEdges = buildEdges(params.length, resolution);
+  const zEdges = buildZEdges(params.thickness, resolution);
+  const nx = xEdges.length - 1;
+  const ny = yEdges.length - 1;
+  const nz = zEdges.length - 1;
+  const occupancy = new Uint8Array(nx * ny * nz);
+  const module = params.pore + params.rib;
+  const sheetThickness = clamp(params.thickness / (params.layers * 2.2), 0.42, 1.1);
+  const layerCenters = Array.from({ length: params.layers }, (_, index) => {
+    if (params.layers === 1) {
+      return params.thickness * 0.5;
+    }
+    return (params.thickness * (index + 0.5)) / params.layers;
+  });
+  const wickCentersX = buildWickCenters(params.width, params.frame, params.wickPitch);
+  const wickCentersY = buildWickCenters(params.length, params.frame, params.wickPitch);
+
+  const xCenters = new Float32Array(nx);
+  const yCenters = new Float32Array(ny);
+  const zCenters = new Float32Array(nz);
+  for (let ix = 0; ix < nx; ix += 1) {
+    xCenters[ix] = (xEdges[ix] + xEdges[ix + 1]) * 0.5;
+  }
+  for (let iy = 0; iy < ny; iy += 1) {
+    yCenters[iy] = (yEdges[iy] + yEdges[iy + 1]) * 0.5;
+  }
+  for (let iz = 0; iz < nz; iz += 1) {
+    zCenters[iz] = (zEdges[iz] + zEdges[iz + 1]) * 0.5;
+  }
+
+  let occupiedCount = 0;
+  for (let iz = 0; iz < nz; iz += 1) {
+    const z = zCenters[iz];
+    let activeLayer = -1;
+    for (let layerIndex = 0; layerIndex < layerCenters.length; layerIndex += 1) {
+      if (Math.abs(z - layerCenters[layerIndex]) <= sheetThickness * 0.5) {
+        activeLayer = layerIndex;
+        break;
+      }
+    }
+
+    for (let iy = 0; iy < ny; iy += 1) {
+      const y = yCenters[iy];
+      for (let ix = 0; ix < nx; ix += 1) {
+        const x = xCenters[ix];
+        const edgeFrame =
+          x < params.frame ||
+          x > params.width - params.frame ||
+          y < params.frame ||
+          y > params.length - params.frame;
+
+        let solid = edgeFrame;
+
+        if (!solid) {
+          for (const centerX of wickCentersX) {
+            if (Math.abs(x - centerX) > params.wickWidth * 0.5) {
+              continue;
+            }
+            for (const centerY of wickCentersY) {
+              if (Math.hypot(x - centerX, y - centerY) <= params.wickWidth * 0.5) {
+                solid = true;
+                break;
+              }
+            }
+            if (solid) {
+              break;
+            }
+          }
+        }
+
+        if (!solid && activeLayer >= 0) {
+          const offsetX = (activeLayer % 2 ? params.stagger : 0) * module;
+          const offsetY = (activeLayer % 2 ? 0 : params.stagger * 0.62) * module;
+          const localX = positiveModulo(x - params.frame + offsetX, module);
+          const localY = positiveModulo(y - params.frame + offsetY, module);
+          solid = localX < params.rib || localY < params.rib;
+        }
+
+        if (!solid) {
+          continue;
+        }
+
+        occupancy[ix + nx * (iy + ny * iz)] = 1;
+        occupiedCount += 1;
+      }
+    }
+  }
+
+  const mesh = buildVoxelMesh(xEdges, yEdges, zEdges, occupancy);
+  const voxelVolume =
+    (xEdges[1] - xEdges[0]) *
+    (yEdges[1] - yEdges[0]) *
+    (zEdges[1] - zEdges[0]);
+  const solidVolume = occupiedCount * voxelVolume;
+  const totalVolume = params.width * params.length * params.thickness;
+  const porosity = clamp(1 - solidVolume / Math.max(totalVolume, 1), 0, 0.98);
+  const massGram = solidVolume * 0.00124;
+
+  const topLayerIndex = layerCenters.length - 1;
+  const topOffsetX = (topLayerIndex % 2 ? params.stagger : 0) * module;
+  const topOffsetY = (topLayerIndex % 2 ? 0 : params.stagger * 0.62) * module;
+  const topStripesX = buildRepeatingIntervals(params.width, params.frame, module, params.rib, topOffsetX);
+  const topStripesY = buildRepeatingIntervals(params.length, params.frame, module, params.rib, topOffsetY);
+
+  const warnings = [];
+  if (params.rib < 0.6) {
+    warnings.push("層リブがかなり細いです。ノズル 0.4 mm 前提なら 0.65 mm 以上の方が安定します。");
+  }
+  if (params.layers >= 6 && sheetThickness < 0.55) {
+    warnings.push("層数が多く、各層が薄めです。ブリッジ条件を詰めないと潰れやすい構成です。");
+  }
+  if (params.pore > 8) {
+    warnings.push("胞の開口が大きめで、スポンジというより通気材寄りです。保水を優先するなら 4 - 7 mm 側が扱いやすいです。");
+  }
+  if (porosity > 0.88) {
+    warnings.push("空隙率がかなり高く、長辺方向の剛性が落ちています。大判では外周フレームかリブ厚を増やしてください。");
+  }
+  if (!warnings.length) {
+    warnings.push("この案は、水平ラティス層と縦ウィック柱の組み合わせとして比較的素直です。平面マットより厚み方向の保水体積を持たせたい時の検討出発点になります。");
+  }
+
+  return {
+    mode: "sponge",
+    params,
+    resolution,
+    mesh,
+    sheetThickness,
+    wickCentersX,
+    wickCentersY,
+    topStripesX,
+    topStripesY,
+    metricCards: [
+      { label: "水平ラティス層", value: `${params.layers} 層` },
+      { label: "胞の開口", value: `${formatValue(params.pore, 1)} mm` },
+      { label: "層板厚", value: `${formatValue(sheetThickness, 2)} mm` },
+      { label: "縦ウィック数", value: `${wickCentersX.length} × ${wickCentersY.length}` },
+      { label: "実空隙率", value: `${formatValue(porosity * 100, 1)} %` },
+      { label: "概算質量", value: `${formatValue(massGram, 1)} g` },
+    ],
     warnings,
   };
 }
 
 function updateMetrics(design) {
-  const metrics = [
-    { label: "実壁厚", value: `${formatValue(design.metrics.wall, 2)} mm` },
-    { label: "実空隙率", value: `${formatValue(design.metrics.porosity * 100, 1)} %` },
-    { label: "通気チャンバー", value: `${formatValue(design.metrics.chamber, 2)} mm` },
-    { label: "毛細管本数", value: `${design.metrics.xChannels} × ${design.metrics.yChannels}` },
-    { label: "濡れ広がり指数", value: formatValue(design.metrics.wetIndex, 3) },
-    { label: "概算質量", value: `${formatValue(design.metrics.massGram, 1)} g` },
-  ];
-
-  dom.metricsGrid.innerHTML = metrics
+  dom.metricsGrid.innerHTML = design.metricCards
     .map(
       ({ label, value }) => `
         <div class="metric-card">
@@ -691,28 +1381,29 @@ function fillIntervals(ctx, intervals, span, fullSpan, scale, fillStyle, vertica
   }
 }
 
-function drawPlan(design) {
-  if (!design) {
-    return;
-  }
+function prepareCanvas() {
   const canvas = dom.planCanvas;
   const ctx = canvas.getContext("2d");
-  const { width: cssWidth, height: cssHeight } = canvas.getBoundingClientRect();
+  const rect = canvas.getBoundingClientRect();
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const drawWidth = Math.max(1, Math.round(cssWidth * dpr));
-  const drawHeight = Math.max(1, Math.round(cssHeight * dpr));
+  const drawWidth = Math.max(1, Math.round(rect.width * dpr));
+  const drawHeight = Math.max(1, Math.round(rect.height * dpr));
   if (canvas.width !== drawWidth || canvas.height !== drawHeight) {
     canvas.width = drawWidth;
     canvas.height = drawHeight;
   }
+  return { canvas, ctx, dpr };
+}
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+function drawMatPlan(design) {
+  const { canvas, ctx, dpr } = prepareCanvas();
   const pad = 28 * dpr;
   const scale = Math.min(
     (canvas.width - pad * 2) / design.params.width,
     (canvas.height - pad * 2) / design.params.length
   );
 
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.save();
   ctx.translate((canvas.width - design.params.width * scale) * 0.5, (canvas.height - design.params.length * scale) * 0.5);
 
@@ -722,12 +1413,23 @@ function drawPlan(design) {
   fillIntervals(ctx, design.xAxis.solidIntervals, design.params.length, design.params.length, scale, "#3e8b58", true);
   fillIntervals(ctx, design.yAxis.solidIntervals, design.params.width, design.params.width, scale, "#3e8b58", false);
 
-  ctx.fillStyle = "rgba(236, 249, 231, 0.96)";
+  ctx.fillStyle = "rgba(148, 231, 176, 0.95)";
   for (const [slotStart, slotEnd] of design.xAxis.slotIntervals) {
     ctx.fillRect(slotStart * scale, 0, Math.max(1, (slotEnd - slotStart) * scale), design.params.length * scale);
   }
   for (const [slotStart, slotEnd] of design.yAxis.slotIntervals) {
     ctx.fillRect(0, slotStart * scale, design.params.width * scale, Math.max(1, (slotEnd - slotStart) * scale));
+  }
+
+  if (design.params.dimple) {
+    ctx.fillStyle = "rgba(242, 249, 193, 0.66)";
+    for (const x of design.xAxis.channelCenters) {
+      for (const y of design.yAxis.channelCenters) {
+        ctx.beginPath();
+        ctx.arc(x * scale, y * scale, Math.max(1.5, design.dimpleRadius * scale * 0.45), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   ctx.strokeStyle = "rgba(20, 50, 30, 0.35)";
@@ -741,8 +1443,58 @@ function drawPlan(design) {
     8 * dpr,
     18 * dpr
   );
-
   ctx.restore();
+}
+
+function drawSpongePlan(design) {
+  const { canvas, ctx, dpr } = prepareCanvas();
+  const pad = 28 * dpr;
+  const scale = Math.min(
+    (canvas.width - pad * 2) / design.params.width,
+    (canvas.height - pad * 2) / design.params.length
+  );
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate((canvas.width - design.params.width * scale) * 0.5, (canvas.height - design.params.length * scale) * 0.5);
+
+  ctx.fillStyle = "#d7f0d0";
+  ctx.fillRect(0, 0, design.params.width * scale, design.params.length * scale);
+
+  ctx.fillStyle = "#3e8b58";
+  ctx.fillRect(0, 0, design.params.width * scale, design.params.frame * scale);
+  ctx.fillRect(0, (design.params.length - design.params.frame) * scale, design.params.width * scale, design.params.frame * scale);
+  ctx.fillRect(0, 0, design.params.frame * scale, design.params.length * scale);
+  ctx.fillRect((design.params.width - design.params.frame) * scale, 0, design.params.frame * scale, design.params.length * scale);
+
+  fillIntervals(ctx, design.topStripesX, design.params.length, design.params.length, scale, "rgba(62, 139, 88, 0.92)", true);
+  fillIntervals(ctx, design.topStripesY, design.params.width, design.params.width, scale, "rgba(62, 139, 88, 0.92)", false);
+
+  ctx.fillStyle = "rgba(148, 231, 176, 0.92)";
+  for (const x of design.wickCentersX) {
+    for (const y of design.wickCentersY) {
+      ctx.beginPath();
+      ctx.arc(x * scale, y * scale, Math.max(1.5, design.params.wickWidth * scale * 0.5), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.strokeStyle = "rgba(20, 50, 30, 0.35)";
+  ctx.lineWidth = Math.max(1, dpr);
+  ctx.strokeRect(0, 0, design.params.width * scale, design.params.length * scale);
+
+  ctx.fillStyle = "rgba(22, 48, 32, 0.74)";
+  ctx.font = `${12 * dpr}px IBM Plex Sans JP`;
+  ctx.fillText(
+    `${formatValue(design.params.width, 0)} × ${formatValue(design.params.length, 0)} mm / ${design.params.layers} layers`,
+    8 * dpr,
+    18 * dpr
+  );
+  ctx.restore();
+}
+
+function drawPlan(design) {
+  getModel().drawPlan(design);
 }
 
 function resizeViewer() {
@@ -752,17 +1504,21 @@ function resizeViewer() {
     camera.aspect = Math.max(1, rect.width) / Math.max(1, rect.height);
     camera.updateProjectionMatrix();
   }
-  drawPlan(state.currentDesign);
+  if (state.currentDesign) {
+    drawPlan(state.currentDesign);
+  }
 }
 
 function renderAll() {
-  state.currentDesign = buildDesign(state.params);
-  state.params = { ...state.currentDesign.params };
+  const design = getModel().buildDesign(getActiveParams());
+  state.currentDesign = design;
+  state.paramsByMode[state.mode] = { ...design.params };
   syncControls();
-  updateMetrics(state.currentDesign);
-  updateGeometry(state.currentDesign);
-  drawPlan(state.currentDesign);
-  window.history.replaceState(null, "", toHash(state.params));
+  setDependentControlStates();
+  updateMetrics(design);
+  updateGeometry(design);
+  drawPlan(design);
+  window.history.replaceState(null, "", toHash());
 }
 
 function exportStl(design) {
@@ -791,14 +1547,14 @@ function exportStl(design) {
 }
 
 function downloadCurrentStl() {
-  const blob = exportStl(state.currentDesign);
+  const design = state.currentDesign;
+  const blob = exportStl(design);
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   const name = [
-    "capillary-mat",
-    `${Math.round(state.currentDesign.params.width)}x${Math.round(state.currentDesign.params.length)}`,
-    `gap-${formatValue(state.currentDesign.params.gap, 2)}`,
-    `void-${Math.round(state.currentDesign.metrics.porosity * 100)}`,
+    getModel().fileStem,
+    `${Math.round(design.params.width)}x${Math.round(design.params.length)}`,
+    `t-${formatValue(design.params.thickness, 1)}`,
   ].join("-");
   anchor.href = url;
   anchor.download = `${name}.stl`;
@@ -808,7 +1564,7 @@ function downloadCurrentStl() {
 }
 
 async function copyShareUrl() {
-  const url = `${window.location.origin}${window.location.pathname}${toHash(state.params)}`;
+  const url = `${window.location.origin}${window.location.pathname}${toHash()}`;
   try {
     await navigator.clipboard.writeText(url);
     dom.actionStatus.textContent = "共有 URL をコピーしました。";
@@ -827,34 +1583,13 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-for (const field of FIELD_IDS) {
-  const range = document.querySelector(`#${field}Range`);
-  const number = document.querySelector(`#${field}Number`);
-  const handleInput = (event) => {
-    const next = Number(event.target.value);
-    if (!Number.isFinite(next)) {
-      return;
-    }
-    state.params[field] = next;
-    range.value = String(next);
-    number.value = String(next);
-    renderAll();
-  };
-  range.addEventListener("input", handleInput);
-  number.addEventListener("input", handleInput);
-}
-
-for (const button of document.querySelectorAll("[data-preset]")) {
-  button.addEventListener("click", () => {
-    applyParams(PRESETS[button.dataset.preset]);
-    dom.actionStatus.textContent = `${button.textContent} preset を適用しました。`;
-  });
-}
-
 dom.downloadBtn.addEventListener("click", downloadCurrentStl);
 dom.copyLinkBtn.addEventListener("click", copyShareUrl);
 dom.resetBtn.addEventListener("click", () => {
-  applyParams(DEFAULTS);
+  state.paramsByMode[state.mode] = { ...getModel().defaults };
+  syncControls();
+  setDependentControlStates();
+  renderAll();
   dom.actionStatus.textContent = "既定値に戻しました。";
 });
 
@@ -862,10 +1597,12 @@ window.addEventListener("resize", resizeViewer);
 
 const initialFromHash = fromHash();
 if (initialFromHash) {
-  state.params = { ...state.params, ...initialFromHash };
+  state.mode = initialFromHash.mode;
+  state.paramsByMode[state.mode] = { ...state.paramsByMode[state.mode], ...initialFromHash.params };
 }
+
 initRenderer();
-syncControls();
+renderModeUi();
 renderAll();
 resizeViewer();
 animate();
