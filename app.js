@@ -284,7 +284,374 @@ const GYROID_FIELDS = [
   },
 ];
 
+const PILLAR_BASE_FIELDS = [
+  { key: "width", label: "幅", unit: "mm", min: 60, max: 220, step: 2, precision: 0 },
+  { key: "length", label: "長さ", unit: "mm", min: 60, max: 220, step: 2, precision: 0 },
+  { key: "thickness", label: "厚み", unit: "mm", min: 2.4, max: 16, step: 0.1, precision: 2 },
+  { key: "frame", label: "外周フレーム幅", unit: "mm", min: 2, max: 12, step: 0.2, precision: 2 },
+  {
+    key: "capillaryDia",
+    label: "鉛直毛細管の内径",
+    unit: "mm",
+    min: 0.45,
+    max: 3.2,
+    step: 0.05,
+    precision: 2,
+    help: "下から上まで通る円柱形毛細管の内径です。細いほど吸い上げ寄り、太いほど通気寄りになります。",
+  },
+  {
+    key: "xGap",
+    label: "X方向の外壁クリアランス",
+    unit: "mm",
+    min: 0.8,
+    max: 18,
+    step: 0.1,
+    precision: 2,
+    help: "隣り合う円柱毛細管の外壁どうしの距離です。中心間距離ではなく実クリアランスです。",
+  },
+  {
+    key: "yGap",
+    label: "Y方向の外壁クリアランス",
+    unit: "mm",
+    min: 0.8,
+    max: 18,
+    step: 0.1,
+    precision: 2,
+    help: "Y 方向の実クリアランスです。X/Y 別に密度を調整できます。",
+  },
+  {
+    key: "cupDia",
+    label: "上面播種カップ径",
+    unit: "mm",
+    min: 1.6,
+    max: 10,
+    step: 0.1,
+    precision: 2,
+    help: "各毛細管の上部を受け皿状に凹ませる直径です。種の座りを作ります。",
+  },
+  {
+    key: "cupDepth",
+    label: "上面播種カップ深さ",
+    unit: "mm",
+    min: 0.1,
+    max: 2.2,
+    step: 0.05,
+    precision: 2,
+    help: "上面カップの深さです。深すぎると上面剛性が落ちます。",
+  },
+];
+
+const PILLAR_ZIGZAG_FIELDS = [
+  ...PILLAR_BASE_FIELDS,
+  {
+    key: "tunnelDia",
+    label: "横孔の内径",
+    unit: "mm",
+    min: 0.5,
+    max: 3.6,
+    step: 0.05,
+    precision: 2,
+    help: "鉛直毛細管どうしをつなぐ横向き通気孔の太さです。",
+  },
+  {
+    key: "tunnelLift",
+    label: "横孔の高さ率",
+    unit: "ratio",
+    min: 0.25,
+    max: 0.82,
+    step: 0.01,
+    precision: 2,
+    help: "横孔を厚みのどの高さに通すかです。0.5 なら中央、0.7 なら上寄りです。",
+  },
+];
+
+const PILLAR_LADDER_FIELDS = [
+  ...PILLAR_BASE_FIELDS,
+  {
+    key: "tunnelDia",
+    label: "連通孔の内径",
+    unit: "mm",
+    min: 0.5,
+    max: 3.2,
+    step: 0.05,
+    precision: 2,
+    help: "隣接する円柱毛細管どうしをつなぐ横孔の太さです。",
+  },
+  {
+    key: "tunnelLift",
+    label: "上段連通孔の高さ率",
+    unit: "ratio",
+    min: 0.42,
+    max: 0.82,
+    step: 0.01,
+    precision: 2,
+    help: "上段側の連通孔位置です。下段はこれをもとに自動配置します。",
+  },
+];
+
 const MODELS = {
+  pillar: {
+    id: "pillar",
+    label: "Vertical Pillar Wells Beta",
+    shortLabel: "縦筒アレイ",
+    eyebrow: "Beta Concept",
+    title: "鉛直円柱毛細管を素直に並べるベースライン案",
+    lead:
+      "下から上まで通る円柱毛細管を、母材の中に規則正しく配置する最も単純な案です。上面だけを浅いカップ状にして、播種位置を自然に持たせます。",
+    paramHint: "円柱毛細管の径と X/Y 密度を直接指定",
+    planTitle: "Pillar Map",
+    planSubtitle: "鉛直毛細管と上面播種カップ",
+    noteSummary: "縦筒アレイ案メモ",
+    noteCopy: [
+      "まず比較の基準として、鉛直方向の円柱毛細管をそのまま並べる案を置きました。流路のルールが単純なので、水の上がり方と通気の見え方を最も素直に観察できます。",
+      "上面の各開口は浅いカップ状に凹ませています。毛細管そのものは下まで貫通しつつ、種は少し受け皿に乗る形です。",
+      "まずこの案で密度と径の感触を掴み、その後に横孔付き案へ進むと比較しやすいです。",
+    ],
+    legend: [
+      { klass: "solid", label: "母材" },
+      { klass: "slot", label: "鉛直毛細管" },
+      { klass: "chamber", label: "播種カップ" },
+    ],
+    defaults: {
+      width: 120,
+      length: 120,
+      thickness: 4.8,
+      frame: 4,
+      capillaryDia: 1.05,
+      xGap: 6,
+      yGap: 6,
+      cupDia: 3.8,
+      cupDepth: 0.7,
+    },
+    presets: {
+      nursery: {
+        label: "Nursery",
+        params: {
+          width: 96,
+          length: 96,
+          thickness: 4.2,
+          frame: 3.6,
+          capillaryDia: 0.9,
+          xGap: 4.8,
+          yGap: 5.2,
+          cupDia: 3.2,
+          cupDepth: 0.55,
+        },
+      },
+      tray: {
+        label: "Tray",
+        params: {
+          width: 128,
+          length: 144,
+          thickness: 5.2,
+          frame: 4.4,
+          capillaryDia: 1.15,
+          xGap: 6.8,
+          yGap: 7.4,
+          cupDia: 4.4,
+          cupDepth: 0.82,
+        },
+      },
+      airy: {
+        label: "Airy",
+        params: {
+          width: 120,
+          length: 132,
+          thickness: 5.6,
+          frame: 4,
+          capillaryDia: 1.25,
+          xGap: 8.5,
+          yGap: 8.5,
+          cupDia: 4.8,
+          cupDepth: 0.72,
+        },
+      },
+    },
+    fields: PILLAR_BASE_FIELDS,
+    buildDesign: buildPillarDesign,
+    drawPlan: drawPillarPlan,
+    fileStem: "vertical-pillar-beta",
+  },
+  pillarZigzag: {
+    id: "pillarZigzag",
+    label: "Zigzag Cross-Bore Beta",
+    shortLabel: "ジグザグ横孔",
+    eyebrow: "Beta Concept",
+    title: "縦筒毛細管をジグザグ横孔でつなぐ通気強化案",
+    lead:
+      "鉛直円柱毛細管を基本にしつつ、上寄りの高さで横向きのジグザグ孔を通して、各筒どうしの空気の抜け道を増やす案です。",
+    paramHint: "円柱毛細管に横向き通気孔を追加",
+    planTitle: "Zigzag Bore Map",
+    planSubtitle: "鉛直毛細管と上段ジグザグ横孔",
+    noteSummary: "ジグザグ横孔案メモ",
+    noteCopy: [
+      "これは、ユーザー案にかなり近いベータです。鉛直方向の円柱毛細管を並べ、その一部を上寄りの高さでジグザグの横孔がつないでいきます。",
+      "横孔は水を吸い上げる主経路ではなく、空気の逃げ道と根の酸素アクセスを増やすための補助経路として扱っています。上寄りに置くことで、下側の連続ウィック区間はなるべく残します。",
+      "横孔を太くしすぎると毛細管らしさは弱まるので、まずは 0.7 - 1.2 mm 程度から比較するのがよいです。",
+    ],
+    legend: [
+      { klass: "solid", label: "母材" },
+      { klass: "slot", label: "鉛直毛細管" },
+      { klass: "chamber", label: "ジグザグ横孔" },
+    ],
+    defaults: {
+      width: 120,
+      length: 120,
+      thickness: 5.2,
+      frame: 4,
+      capillaryDia: 1,
+      xGap: 6.2,
+      yGap: 6.2,
+      cupDia: 3.8,
+      cupDepth: 0.72,
+      tunnelDia: 0.9,
+      tunnelLift: 0.66,
+    },
+    presets: {
+      mild: {
+        label: "Mild",
+        params: {
+          width: 100,
+          length: 112,
+          thickness: 4.6,
+          frame: 3.8,
+          capillaryDia: 0.92,
+          xGap: 5.2,
+          yGap: 5.4,
+          cupDia: 3.4,
+          cupDepth: 0.58,
+          tunnelDia: 0.72,
+          tunnelLift: 0.68,
+        },
+      },
+      compare: {
+        label: "Compare",
+        params: {
+          width: 128,
+          length: 128,
+          thickness: 5.4,
+          frame: 4.2,
+          capillaryDia: 1.08,
+          xGap: 6.4,
+          yGap: 6.4,
+          cupDia: 4.2,
+          cupDepth: 0.76,
+          tunnelDia: 0.96,
+          tunnelLift: 0.64,
+        },
+      },
+      ventilated: {
+        label: "Ventilated",
+        params: {
+          width: 132,
+          length: 120,
+          thickness: 6,
+          frame: 4.2,
+          capillaryDia: 1.15,
+          xGap: 7.8,
+          yGap: 7,
+          cupDia: 4.6,
+          cupDepth: 0.88,
+          tunnelDia: 1.15,
+          tunnelLift: 0.72,
+        },
+      },
+    },
+    fields: PILLAR_ZIGZAG_FIELDS,
+    buildDesign: buildPillarZigzagDesign,
+    drawPlan: drawPillarPlan,
+    fileStem: "pillar-zigzag-beta",
+  },
+  pillarLadder: {
+    id: "pillarLadder",
+    label: "Alternating Ladder Bore Beta",
+    shortLabel: "交互ラダー孔",
+    eyebrow: "Beta Concept",
+    title: "縦筒毛細管を上下 2 層の横孔で疎につなぐ案",
+    lead:
+      "鉛直毛細管を配列し、隣接孔どうしを上下 2 段の高さで交互に連通させる案です。ジグザグ案より局所的な横流れを分散させやすくなります。",
+    paramHint: "円柱毛細管を交互高さの連通孔で比較",
+    planTitle: "Ladder Bore Map",
+    planSubtitle: "鉛直毛細管と上下交互の連通孔",
+    noteSummary: "交互ラダー孔案メモ",
+    noteCopy: [
+      "この案では、隣接する毛細管どうしを全部同じ高さではなく、上段と下段に分けて交互に連通させます。横流れを散らしつつ、板全体を弱くしすぎない狙いです。",
+      "X 方向の連通と Y 方向の連通を別の高さに割り当てるので、空気が抜ける経路に少し 3D っぽさが生まれます。",
+      "実際の吸い上げは円柱毛細管が主役で、横孔は再分配と通気の補助という位置づけです。",
+    ],
+    legend: [
+      { klass: "solid", label: "母材" },
+      { klass: "slot", label: "鉛直毛細管" },
+      { klass: "chamber", label: "交互連通孔" },
+    ],
+    defaults: {
+      width: 120,
+      length: 120,
+      thickness: 5.6,
+      frame: 4,
+      capillaryDia: 0.96,
+      xGap: 6.4,
+      yGap: 6.4,
+      cupDia: 4,
+      cupDepth: 0.76,
+      tunnelDia: 0.8,
+      tunnelLift: 0.7,
+    },
+    presets: {
+      compact: {
+        label: "Compact",
+        params: {
+          width: 96,
+          length: 108,
+          thickness: 4.8,
+          frame: 3.6,
+          capillaryDia: 0.88,
+          xGap: 5.4,
+          yGap: 5,
+          cupDia: 3.4,
+          cupDepth: 0.6,
+          tunnelDia: 0.72,
+          tunnelLift: 0.66,
+        },
+      },
+      balance: {
+        label: "Balance",
+        params: {
+          width: 124,
+          length: 124,
+          thickness: 5.8,
+          frame: 4.2,
+          capillaryDia: 1,
+          xGap: 6.6,
+          yGap: 6.6,
+          cupDia: 4.1,
+          cupDepth: 0.8,
+          tunnelDia: 0.84,
+          tunnelLift: 0.71,
+        },
+      },
+      robust: {
+        label: "Robust",
+        params: {
+          width: 140,
+          length: 124,
+          thickness: 6.6,
+          frame: 4.6,
+          capillaryDia: 1.12,
+          xGap: 7.8,
+          yGap: 7.2,
+          cupDia: 4.6,
+          cupDepth: 0.9,
+          tunnelDia: 0.95,
+          tunnelLift: 0.74,
+        },
+      },
+    },
+    fields: PILLAR_LADDER_FIELDS,
+    buildDesign: buildPillarLadderDesign,
+    drawPlan: drawPillarPlan,
+    fileStem: "pillar-ladder-beta",
+  },
   meander: {
     id: "meander",
     label: "Meander Wick Beta",
@@ -949,6 +1316,14 @@ function mergeIntervals(intervals) {
     }
   }
   return merged;
+}
+
+function circleIntersectsCell(cx, cy, radius, x1, x2, y1, y2) {
+  const nearestX = clamp(cx, x1, x2);
+  const nearestY = clamp(cy, y1, y2);
+  const dx = cx - nearestX;
+  const dy = cy - nearestY;
+  return dx * dx + dy * dy <= radius * radius + 1e-9;
 }
 
 function buildIntervalMask(edges, intervals) {
@@ -1833,6 +2208,418 @@ function buildLeafDesign(inputParams) {
   });
 }
 
+function buildPillarAxis(span, frame, diameter, gap) {
+  const radius = diameter * 0.5;
+  const minCenter = Math.min(span * 0.5, frame + radius);
+  const maxCenter = Math.max(minCenter, span - frame - radius);
+  const pitch = Math.max(diameter + gap, diameter + 0.2);
+  const count = Math.max(1, Math.floor((maxCenter - minCenter) / Math.max(pitch, 0.1)) + 1);
+  const used = Math.max(0, count - 1) * pitch;
+  const start = minCenter + Math.max(0, maxCenter - minCenter - used) * 0.5;
+  return {
+    centers: Array.from({ length: count }, (_, index) => start + index * pitch),
+    count,
+    pitch,
+  };
+}
+
+function buildRectPillarLayout(params) {
+  const xAxis = buildPillarAxis(params.width, params.frame, params.capillaryDia, params.xGap);
+  const yAxis = buildPillarAxis(params.length, params.frame, params.capillaryDia, params.yGap);
+  const centers = [];
+  for (const y of yAxis.centers) {
+    for (const x of xAxis.centers) {
+      centers.push({ x, y });
+    }
+  }
+  return {
+    centers,
+    xCenters: xAxis.centers,
+    yCenters: yAxis.centers,
+    xPitch: xAxis.pitch,
+    yPitch: yAxis.pitch,
+    columnCount: xAxis.count,
+    rowCount: yAxis.count,
+  };
+}
+
+function bounceIndex(index, length) {
+  if (length <= 1) {
+    return 0;
+  }
+  const cycle = (length - 1) * 2;
+  const phase = positiveModulo(index, cycle);
+  return phase < length ? phase : cycle - phase;
+}
+
+function clampTunnelCenterZ(thickness, cupDepth, radius, ratio) {
+  const minZ = radius + 0.22;
+  const maxZ = Math.max(minZ, thickness - cupDepth - radius - 0.18);
+  return clamp(thickness * ratio, minZ, maxZ);
+}
+
+function estimatePillarResolution(params, tunnelDia = 0) {
+  const dominant = Math.max(params.width, params.length);
+  const detail = Math.min(
+    params.capillaryDia * 0.34,
+    params.xGap * 0.4,
+    params.yGap * 0.4,
+    params.cupDepth * 0.95,
+    params.thickness / 10,
+    tunnelDia > 0 ? tunnelDia * 0.42 : Infinity
+  );
+  return clamp(detail, Math.max(0.28, dominant / 250), 0.74);
+}
+
+function distanceToSegment3d(px, py, pz, ax, ay, az, bx, by, bz) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const dz = bz - az;
+  const lengthSq = dx * dx + dy * dy + dz * dz;
+  if (lengthSq <= 1e-9) {
+    return Math.hypot(px - ax, py - ay, pz - az);
+  }
+  const t = clamp(((px - ax) * dx + (py - ay) * dy + (pz - az) * dz) / lengthSq, 0, 1);
+  const qx = ax + dx * t;
+  const qy = ay + dy * t;
+  const qz = az + dz * t;
+  return Math.hypot(px - qx, py - qy, pz - qz);
+}
+
+function distanceToTunnelNetwork3d(px, py, pz, segments) {
+  let best = Infinity;
+  for (const segment of segments) {
+    const distance =
+      distanceToSegment3d(px, py, pz, segment.x1, segment.y1, segment.z1, segment.x2, segment.y2, segment.z2) -
+      segment.radius;
+    if (distance < best) {
+      best = distance;
+    }
+  }
+  return best;
+}
+
+function measureSegmentNetworkLength(segments) {
+  let total = 0;
+  for (const segment of segments) {
+    total += Math.hypot(segment.x2 - segment.x1, segment.y2 - segment.y1, segment.z2 - segment.z1);
+  }
+  return total;
+}
+
+function buildZigzagTunnelSegments(layout, params) {
+  const radius = params.tunnelDia * 0.5;
+  const z = clampTunnelCenterZ(params.thickness, params.cupDepth, radius, params.tunnelLift);
+  const segments = [];
+
+  if (layout.xCenters.length >= 2) {
+    const points = layout.xCenters.map((x, index) => ({
+      x,
+      y: layout.yCenters[bounceIndex(index, layout.yCenters.length)],
+      z,
+    }));
+    for (let index = 1; index < points.length; index += 1) {
+      const a = points[index - 1];
+      const b = points[index];
+      segments.push({ x1: a.x, y1: a.y, z1: a.z, x2: b.x, y2: b.y, z2: b.z, radius });
+    }
+    return { segments, upperZ: z, lowerZ: z };
+  }
+
+  if (layout.yCenters.length >= 2) {
+    for (let index = 1; index < layout.yCenters.length; index += 1) {
+      segments.push({
+        x1: layout.xCenters[0],
+        y1: layout.yCenters[index - 1],
+        z1: z,
+        x2: layout.xCenters[0],
+        y2: layout.yCenters[index],
+        z2: z,
+        radius,
+      });
+    }
+  }
+
+  return { segments, upperZ: z, lowerZ: z };
+}
+
+function buildLadderTunnelSegments(layout, params) {
+  const radius = params.tunnelDia * 0.5;
+  const upperZ = clampTunnelCenterZ(params.thickness, params.cupDepth, radius, params.tunnelLift);
+  const lowerTarget = Math.min(params.thickness * 0.38, upperZ - Math.max(radius * 2.4, 0.9));
+  const lowerZ = clamp(lowerTarget, radius + 0.22, Math.max(radius + 0.22, upperZ - radius * 1.6));
+  const segments = [];
+
+  for (let rowIndex = 0; rowIndex < layout.yCenters.length; rowIndex += 1) {
+    const y = layout.yCenters[rowIndex];
+    const z = rowIndex % 2 === 0 ? upperZ : lowerZ;
+    for (let index = 1; index < layout.xCenters.length; index += 1) {
+      segments.push({
+        x1: layout.xCenters[index - 1],
+        y1: y,
+        z1: z,
+        x2: layout.xCenters[index],
+        y2: y,
+        z2: z,
+        radius,
+      });
+    }
+  }
+
+  for (let columnIndex = 0; columnIndex < layout.xCenters.length; columnIndex += 1) {
+    const x = layout.xCenters[columnIndex];
+    const z = columnIndex % 2 === 0 ? lowerZ : upperZ;
+    for (let index = 1; index < layout.yCenters.length; index += 1) {
+      segments.push({
+        x1: x,
+        y1: layout.yCenters[index - 1],
+        z1: z,
+        x2: x,
+        y2: layout.yCenters[index],
+        z2: z,
+        radius,
+      });
+    }
+  }
+
+  return { segments, upperZ, lowerZ };
+}
+
+function normalizePillarBaseParams(inputParams) {
+  return {
+    width: clamp(inputParams.width, 60, 220),
+    length: clamp(inputParams.length, 60, 220),
+    thickness: clamp(inputParams.thickness, 2.4, 16),
+    frame: clamp(inputParams.frame, 2, Math.min(inputParams.width, inputParams.length) * 0.24),
+    capillaryDia: clamp(inputParams.capillaryDia, 0.45, 3.2),
+    xGap: clamp(inputParams.xGap, 0.8, 18),
+    yGap: clamp(inputParams.yGap, 0.8, 18),
+    cupDia: clamp(inputParams.cupDia, 1.6, 10),
+    cupDepth: clamp(inputParams.cupDepth, 0.1, 2.2),
+  };
+}
+
+function buildPillarVoxelDesign({ mode, params, layout, tunnelSegments = [], tunnelLabel = null, tunnelLevels = null }) {
+  const capillaryRadius = params.capillaryDia * 0.5;
+  const pitchFloor = Math.min(layout.xPitch, layout.yPitch);
+  const maxCupRadius = Math.max(
+    capillaryRadius + 0.18,
+    (Number.isFinite(pitchFloor) ? pitchFloor : params.capillaryDia + Math.min(params.xGap, params.yGap)) * 0.48
+  );
+  const cupRadius = clamp(params.cupDia * 0.5, capillaryRadius + 0.18, maxCupRadius);
+  const cupDepth = Math.min(params.cupDepth, params.thickness * 0.42);
+  const tunnelDia = tunnelSegments.length ? tunnelSegments[0].radius * 2 : 0;
+  const resolution = estimatePillarResolution(params, tunnelDia);
+
+  const xAnchors = [params.frame, params.width - params.frame];
+  const yAnchors = [params.frame, params.length - params.frame];
+  const zAnchors = [0, params.thickness, params.thickness - cupDepth];
+  for (const center of layout.centers) {
+    xAnchors.push(center.x - capillaryRadius, center.x + capillaryRadius, center.x - cupRadius, center.x + cupRadius);
+    yAnchors.push(center.y - capillaryRadius, center.y + capillaryRadius, center.y - cupRadius, center.y + cupRadius);
+  }
+  for (const segment of tunnelSegments) {
+    xAnchors.push(segment.x1 - segment.radius, segment.x1 + segment.radius, segment.x2 - segment.radius, segment.x2 + segment.radius);
+    yAnchors.push(segment.y1 - segment.radius, segment.y1 + segment.radius, segment.y2 - segment.radius, segment.y2 + segment.radius);
+    zAnchors.push(segment.z1 - segment.radius, segment.z1 + segment.radius, segment.z2 - segment.radius, segment.z2 + segment.radius);
+  }
+
+  const xEdges = buildAnchoredEdges(params.width, resolution, xAnchors);
+  const yEdges = buildAnchoredEdges(params.length, resolution, yAnchors);
+  const zEdges = buildAnchoredEdges(params.thickness, clamp(Math.min(resolution, params.thickness / 12), 0.18, 0.48), zAnchors);
+  const nx = xEdges.length - 1;
+  const ny = yEdges.length - 1;
+  const nz = zEdges.length - 1;
+  const occupancy = new Uint8Array(nx * ny * nz);
+  const tubeMask = new Uint8Array(nx * ny);
+  const topHeights = new Float32Array(nx * ny);
+  const xCenters = new Float32Array(nx);
+  const yCenters = new Float32Array(ny);
+  const zCenters = new Float32Array(nz);
+
+  for (let ix = 0; ix < nx; ix += 1) {
+    xCenters[ix] = (xEdges[ix] + xEdges[ix + 1]) * 0.5;
+  }
+  for (let iy = 0; iy < ny; iy += 1) {
+    yCenters[iy] = (yEdges[iy] + yEdges[iy + 1]) * 0.5;
+  }
+  for (let iz = 0; iz < nz; iz += 1) {
+    zCenters[iz] = (zEdges[iz] + zEdges[iz + 1]) * 0.5;
+  }
+
+  for (let iy = 0; iy < ny; iy += 1) {
+    const y = yCenters[iy];
+    for (let ix = 0; ix < nx; ix += 1) {
+      const x = xCenters[ix];
+      const x1 = xEdges[ix];
+      const x2 = xEdges[ix + 1];
+      const y1 = yEdges[iy];
+      const y2 = yEdges[iy + 1];
+      const flatIndex = ix + iy * nx;
+      const inInterior =
+        x >= params.frame &&
+        x <= params.width - params.frame &&
+        y >= params.frame &&
+        y <= params.length - params.frame;
+      if (!inInterior) {
+        topHeights[flatIndex] = params.thickness;
+        continue;
+      }
+      for (const center of layout.centers) {
+        if (circleIntersectsCell(center.x, center.y, capillaryRadius, x1, x2, y1, y2)) {
+          tubeMask[flatIndex] = 1;
+          break;
+        }
+      }
+      topHeights[flatIndex] = buildDimpleHeight(
+        params.thickness,
+        x,
+        y,
+        params.thickness,
+        layout.centers,
+        cupRadius,
+        cupDepth
+      );
+    }
+  }
+
+  let solidVolume = 0;
+  for (let iz = 0; iz < nz; iz += 1) {
+    const z = zCenters[iz];
+    const dz = zEdges[iz + 1] - zEdges[iz];
+    for (let iy = 0; iy < ny; iy += 1) {
+      const y = yCenters[iy];
+      const dy = yEdges[iy + 1] - yEdges[iy];
+      for (let ix = 0; ix < nx; ix += 1) {
+        const x = xCenters[ix];
+        const dx = xEdges[ix + 1] - xEdges[ix];
+        const edgeFrame =
+          x < params.frame ||
+          x > params.width - params.frame ||
+          y < params.frame ||
+          y > params.length - params.frame;
+        let solid = edgeFrame;
+        if (!solid) {
+          const flatIndex = ix + iy * nx;
+          if (tubeMask[flatIndex]) {
+            continue;
+          }
+          if (tunnelSegments.length && distanceToTunnelNetwork3d(x, y, z, tunnelSegments) <= 0) {
+            continue;
+          }
+          solid = z <= topHeights[flatIndex] + 1e-6;
+        }
+        if (!solid) {
+          continue;
+        }
+        occupancy[ix + nx * (iy + ny * iz)] = 1;
+        solidVolume += dx * dy * dz;
+      }
+    }
+  }
+
+  const mesh = buildVoxelMesh(xEdges, yEdges, zEdges, occupancy);
+  const totalVolume = params.width * params.length * params.thickness;
+  const porosity = clamp(1 - solidVolume / Math.max(totalVolume, 1), 0, 0.98);
+  const massGram = solidVolume * 0.00124;
+
+  const warnings = [];
+  if (params.capillaryDia > 1.6) {
+    warnings.push("鉛直毛細管の内径が広めです。吸い上げの比較なら 0.8 - 1.2 mm 側が基準にしやすいです。");
+  }
+  if (params.xGap < 2 || params.yGap < 2) {
+    warnings.push("円柱どうしの外壁クリアランスが狭めです。通気比較なら 3 mm 以上あると差が見やすいです。");
+  }
+  if (cupDepth > params.thickness * 0.24) {
+    warnings.push("上面カップが深めで、上面剛性が落ち気味です。0.4 - 0.9 mm 付近から確認するのが安全です。");
+  }
+  if (tunnelDia > 0 && tunnelDia > params.capillaryDia * 1.2) {
+    warnings.push("横孔が鉛直毛細管よりかなり太いです。通気は増えますが、毛細管らしさは弱まりやすいです。");
+  }
+  if (porosity > 0.84) {
+    warnings.push("空隙率が高く、持ち上げ時のたわみが出やすい構成です。厚みかクリアランスを少し戻す余地があります。");
+  }
+  if (!warnings.length) {
+    warnings.push("円柱毛細管系としては比較的素直な構成です。まずはこの寸法感で濡れ上がりと乾きの差を見るのに向いています。");
+  }
+
+  const metricCards = [
+    { label: "毛細管本数", value: `${layout.columnCount} × ${layout.rowCount}` },
+    { label: "毛細管内径", value: `${formatValue(params.capillaryDia, 2)} mm` },
+    { label: "配置ピッチ", value: `X ${formatValue(layout.xPitch, 1)} / Y ${formatValue(layout.yPitch, 1)} mm` },
+    { label: "播種カップ径", value: `${formatValue(cupRadius * 2, 2)} mm` },
+  ];
+  if (tunnelLabel) {
+    metricCards.push(
+      { label: tunnelLabel, value: `${formatValue(tunnelDia, 2)} mm` },
+      { label: "横孔延長", value: `${formatValue(measureSegmentNetworkLength(tunnelSegments), 0)} mm` }
+    );
+  }
+  if (tunnelLevels) {
+    metricCards.push({ label: "横孔高さ", value: tunnelLevels });
+  }
+  metricCards.push(
+    { label: "実空隙率", value: `${formatValue(porosity * 100, 1)} %` },
+    { label: "概算質量", value: `${formatValue(massGram, 1)} g` }
+  );
+
+  return {
+    mode,
+    params,
+    resolution,
+    mesh,
+    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zEdges[1] - zEdges[0], 2)} mm`,
+    pillarCenters: layout.centers,
+    capillaryRadius,
+    cupRadius,
+    tunnelSegments,
+    metricCards,
+    warnings,
+  };
+}
+
+function buildPillarDesign(inputParams) {
+  const params = normalizePillarBaseParams(inputParams);
+  const layout = buildRectPillarLayout(params);
+  return buildPillarVoxelDesign({ mode: "pillar", params, layout });
+}
+
+function buildPillarZigzagDesign(inputParams) {
+  const params = {
+    ...normalizePillarBaseParams(inputParams),
+    tunnelDia: clamp(inputParams.tunnelDia, 0.5, 3.6),
+    tunnelLift: clamp(inputParams.tunnelLift, 0.25, 0.82),
+  };
+  const layout = buildRectPillarLayout(params);
+  const tunnel = buildZigzagTunnelSegments(layout, params);
+  return buildPillarVoxelDesign({
+    mode: "pillarZigzag",
+    params,
+    layout,
+    tunnelSegments: tunnel.segments,
+    tunnelLabel: "横孔内径",
+    tunnelLevels: `${formatValue(tunnel.upperZ, 2)} mm`,
+  });
+}
+
+function buildPillarLadderDesign(inputParams) {
+  const params = {
+    ...normalizePillarBaseParams(inputParams),
+    tunnelDia: clamp(inputParams.tunnelDia, 0.5, 3.2),
+    tunnelLift: clamp(inputParams.tunnelLift, 0.42, 0.82),
+  };
+  const layout = buildRectPillarLayout(params);
+  const tunnel = buildLadderTunnelSegments(layout, params);
+  return buildPillarVoxelDesign({
+    mode: "pillarLadder",
+    params,
+    layout,
+    tunnelSegments: tunnel.segments,
+    tunnelLabel: "連通孔内径",
+    tunnelLevels: `${formatValue(tunnel.lowerZ, 2)} / ${formatValue(tunnel.upperZ, 2)} mm`,
+  });
+}
+
 function estimateGyroidResolution(params) {
   const dominant = Math.max(params.width, params.length);
   return clamp(
@@ -2391,6 +3178,59 @@ function drawChannelPlan(design) {
       ctx.arc(center.x * scale, center.y * scale, Math.max(1.5, design.dimpleRadius * scale), 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  ctx.strokeStyle = "rgba(20, 50, 30, 0.35)";
+  ctx.lineWidth = Math.max(1, dpr);
+  ctx.strokeRect(0, 0, design.params.width * scale, design.params.length * scale);
+  drawDimensionStamp(
+    ctx,
+    dpr,
+    `${formatValue(design.params.width, 0)} × ${formatValue(design.params.length, 0)} mm`
+  );
+  ctx.restore();
+}
+
+function drawPillarPlan(design) {
+  const { canvas, ctx, dpr } = prepareCanvas();
+  const pad = 28 * dpr;
+  const scale = Math.min(
+    (canvas.width - pad * 2) / design.params.width,
+    (canvas.height - pad * 2) / design.params.length
+  );
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate((canvas.width - design.params.width * scale) * 0.5, (canvas.height - design.params.length * scale) * 0.5);
+
+  ctx.fillStyle = "#3e8b58";
+  ctx.fillRect(0, 0, design.params.width * scale, design.params.length * scale);
+
+  if (design.tunnelSegments.length) {
+    ctx.strokeStyle = "rgba(242, 249, 193, 0.82)";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const segment of design.tunnelSegments) {
+      ctx.beginPath();
+      ctx.lineWidth = Math.max(1.2, segment.radius * 2 * scale);
+      ctx.moveTo(segment.x1 * scale, segment.y1 * scale);
+      ctx.lineTo(segment.x2 * scale, segment.y2 * scale);
+      ctx.stroke();
+    }
+  }
+
+  ctx.fillStyle = "rgba(242, 249, 193, 0.74)";
+  for (const center of design.pillarCenters) {
+    ctx.beginPath();
+    ctx.arc(center.x * scale, center.y * scale, Math.max(1.5, design.cupRadius * scale), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = "rgba(148, 231, 176, 0.98)";
+  for (const center of design.pillarCenters) {
+    ctx.beginPath();
+    ctx.arc(center.x * scale, center.y * scale, Math.max(1.2, design.capillaryRadius * scale), 0, Math.PI * 2);
+    ctx.fill();
   }
 
   ctx.strokeStyle = "rgba(20, 50, 30, 0.35)";
