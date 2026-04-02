@@ -1889,13 +1889,19 @@ function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
   };
 }
 
-const TETRAHEDRA = [
-  [0, 5, 1, 6],
-  [0, 1, 2, 6],
-  [0, 2, 3, 6],
-  [0, 3, 7, 6],
-  [0, 7, 4, 6],
-  [0, 4, 5, 6],
+const CUBE_EDGES = [
+  [0, 1],
+  [1, 2],
+  [2, 3],
+  [3, 0],
+  [4, 5],
+  [5, 6],
+  [6, 7],
+  [7, 4],
+  [0, 4],
+  [1, 5],
+  [2, 6],
+  [3, 7],
 ];
 
 function normalize3(x, y, z) {
@@ -2018,123 +2024,8 @@ function interpolateIsoVertex(a, b, va, vb, ga, gb) {
   return { point, normal };
 }
 
-function polygonizeTetrahedron(points, values, gradients, positions, normals, faceNormals) {
-  const inside = [];
-  const outside = [];
-  for (let index = 0; index < 4; index += 1) {
-    if (values[index] <= 0) {
-      inside.push(index);
-    } else {
-      outside.push(index);
-    }
-  }
-
-  if (!inside.length || inside.length === 4) {
-    return;
-  }
-
-  const insideCentroid = [0, 0, 0];
-  const outsideCentroid = [0, 0, 0];
-  for (const index of inside) {
-    insideCentroid[0] += points[index][0];
-    insideCentroid[1] += points[index][1];
-    insideCentroid[2] += points[index][2];
-  }
-  for (const index of outside) {
-    outsideCentroid[0] += points[index][0];
-    outsideCentroid[1] += points[index][1];
-    outsideCentroid[2] += points[index][2];
-  }
-  insideCentroid[0] /= inside.length;
-  insideCentroid[1] /= inside.length;
-  insideCentroid[2] /= inside.length;
-  outsideCentroid[0] /= outside.length;
-  outsideCentroid[1] /= outside.length;
-  outsideCentroid[2] /= outside.length;
-  const desiredDirection = [
-    outsideCentroid[0] - insideCentroid[0],
-    outsideCentroid[1] - insideCentroid[1],
-    outsideCentroid[2] - insideCentroid[2],
-  ];
-
-  if (inside.length === 1 || inside.length === 3) {
-    const pivot = inside.length === 1 ? inside[0] : outside[0];
-    const others = inside.length === 1 ? outside : inside;
-    const intersections = others.map((index) =>
-      interpolateIsoVertex(points[pivot], points[index], values[pivot], values[index], gradients[pivot], gradients[index])
-    );
-    pushSmoothTriangle(
-      positions,
-      normals,
-      faceNormals,
-      intersections[0].point,
-      intersections[1].point,
-      intersections[2].point,
-      intersections[0].normal,
-      intersections[1].normal,
-      intersections[2].normal,
-      desiredDirection
-    );
-    return;
-  }
-
-  const a = interpolateIsoVertex(
-    points[inside[0]],
-    points[outside[0]],
-    values[inside[0]],
-    values[outside[0]],
-    gradients[inside[0]],
-    gradients[outside[0]]
-  );
-  const b = interpolateIsoVertex(
-    points[inside[0]],
-    points[outside[1]],
-    values[inside[0]],
-    values[outside[1]],
-    gradients[inside[0]],
-    gradients[outside[1]]
-  );
-  const c = interpolateIsoVertex(
-    points[inside[1]],
-    points[outside[1]],
-    values[inside[1]],
-    values[outside[1]],
-    gradients[inside[1]],
-    gradients[outside[1]]
-  );
-  const d = interpolateIsoVertex(
-    points[inside[1]],
-    points[outside[0]],
-    values[inside[1]],
-    values[outside[0]],
-    gradients[inside[1]],
-    gradients[outside[0]]
-  );
-
-  pushSmoothTriangle(
-    positions,
-    normals,
-    faceNormals,
-    a.point,
-    b.point,
-    c.point,
-    a.normal,
-    b.normal,
-    c.normal,
-    desiredDirection
-  );
-  pushSmoothTriangle(
-    positions,
-    normals,
-    faceNormals,
-    a.point,
-    c.point,
-    d.point,
-    a.normal,
-    c.normal,
-    d.normal,
-    desiredDirection
-  );
+function cellIndex(ix, iy, iz, nx, ny) {
+  return ix + nx * (iy + ny * iz);
 }
 
 function keepLargestSolidVertexComponent(values, gx, gy, gz) {
@@ -2214,32 +2105,50 @@ function keepLargestSolidVertexComponent(values, gx, gy, gz) {
   }
 }
 
-function buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField, options = {}) {
-  const gx = xEdges.length;
-  const gy = yEdges.length;
-  const gz = zEdges.length;
-  const values = computeGridFieldValues(xEdges, yEdges, zEdges, sampleField);
+function padFieldEdges(edges) {
+  const startStep = Math.max(1e-3, edges[1] - edges[0]);
+  const endStep = Math.max(1e-3, edges[edges.length - 1] - edges[edges.length - 2]);
+  return [edges[0] - startStep, ...edges, edges[edges.length - 1] + endStep];
+}
 
+function buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField, options = {}) {
+  const values = computeGridFieldValues(xEdges, yEdges, zEdges, sampleField);
   if (options.keepLargestComponent) {
-    keepLargestSolidVertexComponent(values, gx, gy, gz);
+    keepLargestSolidVertexComponent(values, xEdges.length, yEdges.length, zEdges.length);
   }
 
-  const gradients = computeGridGradients(xEdges, yEdges, zEdges, values);
+  const gridXEdges = padFieldEdges(xEdges);
+  const gridYEdges = padFieldEdges(yEdges);
+  const gridZEdges = padFieldEdges(zEdges);
+  const gx = gridXEdges.length;
+  const gy = gridYEdges.length;
+  const gz = gridZEdges.length;
+  const nx = gx - 1;
+  const ny = gy - 1;
+  const nz = gz - 1;
+  const meshValues = computeGridFieldValues(gridXEdges, gridYEdges, gridZEdges, sampleField);
+
+  if (options.keepLargestComponent) {
+    keepLargestSolidVertexComponent(meshValues, gx, gy, gz);
+  }
+
+  const gradients = computeGridGradients(gridXEdges, gridYEdges, gridZEdges, meshValues);
   const positions = [];
   const normals = [];
   const faceNormals = [];
-
+  const xOffset = (xEdges[0] + xEdges[xEdges.length - 1]) * 0.5;
+  const yOffset = (yEdges[0] + yEdges[yEdges.length - 1]) * 0.5;
+  const zOffset = (zEdges[0] + zEdges[zEdges.length - 1]) * 0.5;
+  const cellVertexIds = new Int32Array(nx * ny * nz).fill(-1);
+  const cellPoints = [];
+  const cellNormals = [];
   const cubeVertices = new Array(8);
   const cubeValues = new Array(8);
   const cubeGradients = new Array(8);
 
-  for (let iz = 0; iz < gz - 1; iz += 1) {
-    const z1 = zEdges[iz];
-    const z2 = zEdges[iz + 1];
-    for (let iy = 0; iy < gy - 1; iy += 1) {
-      const y1 = yEdges[iy];
-      const y2 = yEdges[iy + 1];
-      for (let ix = 0; ix < gx - 1; ix += 1) {
+  for (let iz = 0; iz < nz; iz += 1) {
+    for (let iy = 0; iy < ny; iy += 1) {
+      for (let ix = 0; ix < nx; ix += 1) {
         const cornerIndices = [
           vertexIndex(ix, iy, iz, gx, gy),
           vertexIndex(ix + 1, iy, iz, gx, gy),
@@ -2254,26 +2163,23 @@ function buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField, options = {})
         let hasInside = false;
         let hasOutside = false;
         for (let index = 0; index < 8; index += 1) {
-          const value = values[cornerIndices[index]];
+          const value = meshValues[cornerIndices[index]];
           cubeValues[index] = value;
           hasInside ||= value <= 0;
           hasOutside ||= value > 0;
-        }
-        if (!hasInside && !hasOutside) {
-          continue;
         }
         if (!hasInside || !hasOutside) {
           continue;
         }
 
-        cubeVertices[0] = [xEdges[ix], yEdges[iy], z1];
-        cubeVertices[1] = [xEdges[ix + 1], yEdges[iy], z1];
-        cubeVertices[2] = [xEdges[ix + 1], yEdges[iy + 1], z1];
-        cubeVertices[3] = [xEdges[ix], yEdges[iy + 1], z1];
-        cubeVertices[4] = [xEdges[ix], yEdges[iy], z2];
-        cubeVertices[5] = [xEdges[ix + 1], yEdges[iy], z2];
-        cubeVertices[6] = [xEdges[ix + 1], yEdges[iy + 1], z2];
-        cubeVertices[7] = [xEdges[ix], yEdges[iy + 1], z2];
+        cubeVertices[0] = [gridXEdges[ix], gridYEdges[iy], gridZEdges[iz]];
+        cubeVertices[1] = [gridXEdges[ix + 1], gridYEdges[iy], gridZEdges[iz]];
+        cubeVertices[2] = [gridXEdges[ix + 1], gridYEdges[iy + 1], gridZEdges[iz]];
+        cubeVertices[3] = [gridXEdges[ix], gridYEdges[iy + 1], gridZEdges[iz]];
+        cubeVertices[4] = [gridXEdges[ix], gridYEdges[iy], gridZEdges[iz + 1]];
+        cubeVertices[5] = [gridXEdges[ix + 1], gridYEdges[iy], gridZEdges[iz + 1]];
+        cubeVertices[6] = [gridXEdges[ix + 1], gridYEdges[iy + 1], gridZEdges[iz + 1]];
+        cubeVertices[7] = [gridXEdges[ix], gridYEdges[iy + 1], gridZEdges[iz + 1]];
 
         for (let index = 0; index < 8; index += 1) {
           const gradientIndex = cornerIndices[index] * 3;
@@ -2284,16 +2190,145 @@ function buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField, options = {})
           ];
         }
 
-        for (const tetra of TETRAHEDRA) {
-          polygonizeTetrahedron(
-            tetra.map((corner) => cubeVertices[corner]),
-            tetra.map((corner) => cubeValues[corner]),
-            tetra.map((corner) => cubeGradients[corner]),
-            positions,
-            normals,
-            faceNormals
+        let count = 0;
+        let sx = 0;
+        let sy = 0;
+        let sz = 0;
+        let snx = 0;
+        let sny = 0;
+        let snz = 0;
+        for (const [a, b] of CUBE_EDGES) {
+          if ((cubeValues[a] <= 0) === (cubeValues[b] <= 0)) {
+            continue;
+          }
+          const intersection = interpolateIsoVertex(
+            cubeVertices[a],
+            cubeVertices[b],
+            cubeValues[a],
+            cubeValues[b],
+            cubeGradients[a],
+            cubeGradients[b]
           );
+          sx += intersection.point[0];
+          sy += intersection.point[1];
+          sz += intersection.point[2];
+          snx += intersection.normal[0];
+          sny += intersection.normal[1];
+          snz += intersection.normal[2];
+          count += 1;
         }
+
+        if (count < 3) {
+          continue;
+        }
+
+        const point = [sx / count - xOffset, sy / count - yOffset, sz / count - zOffset];
+        const normal = normalize3(snx, sny, snz);
+        const id = cellPoints.length;
+        cellVertexIds[cellIndex(ix, iy, iz, nx, ny)] = id;
+        cellPoints.push(point);
+        cellNormals.push(normal);
+      }
+    }
+  }
+
+  const pushSurfaceQuad = (ids, desiredDirection) => {
+    if (ids.some((id) => id < 0)) {
+      return;
+    }
+    const a = cellPoints[ids[0]];
+    const b = cellPoints[ids[1]];
+    const c = cellPoints[ids[2]];
+    const d = cellPoints[ids[3]];
+    const na = cellNormals[ids[0]];
+    const nb = cellNormals[ids[1]];
+    const nc = cellNormals[ids[2]];
+    const nd = cellNormals[ids[3]];
+
+    pushSmoothTriangle(positions, normals, faceNormals, a, b, c, na, nb, nc, desiredDirection);
+    pushSmoothTriangle(positions, normals, faceNormals, a, c, d, na, nc, nd, desiredDirection);
+  };
+
+  for (let iz = 1; iz < gz - 1; iz += 1) {
+    for (let iy = 1; iy < gy - 1; iy += 1) {
+      for (let ix = 0; ix < gx - 1; ix += 1) {
+        const aIndex = vertexIndex(ix, iy, iz, gx, gy);
+        const bIndex = vertexIndex(ix + 1, iy, iz, gx, gy);
+        if ((meshValues[aIndex] <= 0) === (meshValues[bIndex] <= 0)) {
+          continue;
+        }
+        const normalIndexA = aIndex * 3;
+        const normalIndexB = bIndex * 3;
+        const desiredDirection = normalize3(
+          gradients[normalIndexA + 0] + gradients[normalIndexB + 0],
+          gradients[normalIndexA + 1] + gradients[normalIndexB + 1],
+          gradients[normalIndexA + 2] + gradients[normalIndexB + 2]
+        );
+        pushSurfaceQuad(
+          [
+            cellVertexIds[cellIndex(ix, iy - 1, iz - 1, nx, ny)],
+            cellVertexIds[cellIndex(ix, iy, iz - 1, nx, ny)],
+            cellVertexIds[cellIndex(ix, iy, iz, nx, ny)],
+            cellVertexIds[cellIndex(ix, iy - 1, iz, nx, ny)],
+          ],
+          desiredDirection
+        );
+      }
+    }
+  }
+
+  for (let iz = 1; iz < gz - 1; iz += 1) {
+    for (let iy = 0; iy < gy - 1; iy += 1) {
+      for (let ix = 1; ix < gx - 1; ix += 1) {
+        const aIndex = vertexIndex(ix, iy, iz, gx, gy);
+        const bIndex = vertexIndex(ix, iy + 1, iz, gx, gy);
+        if ((meshValues[aIndex] <= 0) === (meshValues[bIndex] <= 0)) {
+          continue;
+        }
+        const normalIndexA = aIndex * 3;
+        const normalIndexB = bIndex * 3;
+        const desiredDirection = normalize3(
+          gradients[normalIndexA + 0] + gradients[normalIndexB + 0],
+          gradients[normalIndexA + 1] + gradients[normalIndexB + 1],
+          gradients[normalIndexA + 2] + gradients[normalIndexB + 2]
+        );
+        pushSurfaceQuad(
+          [
+            cellVertexIds[cellIndex(ix - 1, iy, iz - 1, nx, ny)],
+            cellVertexIds[cellIndex(ix, iy, iz - 1, nx, ny)],
+            cellVertexIds[cellIndex(ix, iy, iz, nx, ny)],
+            cellVertexIds[cellIndex(ix - 1, iy, iz, nx, ny)],
+          ],
+          desiredDirection
+        );
+      }
+    }
+  }
+
+  for (let iz = 0; iz < gz - 1; iz += 1) {
+    for (let iy = 1; iy < gy - 1; iy += 1) {
+      for (let ix = 1; ix < gx - 1; ix += 1) {
+        const aIndex = vertexIndex(ix, iy, iz, gx, gy);
+        const bIndex = vertexIndex(ix, iy, iz + 1, gx, gy);
+        if ((meshValues[aIndex] <= 0) === (meshValues[bIndex] <= 0)) {
+          continue;
+        }
+        const normalIndexA = aIndex * 3;
+        const normalIndexB = bIndex * 3;
+        const desiredDirection = normalize3(
+          gradients[normalIndexA + 0] + gradients[normalIndexB + 0],
+          gradients[normalIndexA + 1] + gradients[normalIndexB + 1],
+          gradients[normalIndexA + 2] + gradients[normalIndexB + 2]
+        );
+        pushSurfaceQuad(
+          [
+            cellVertexIds[cellIndex(ix - 1, iy - 1, iz, nx, ny)],
+            cellVertexIds[cellIndex(ix, iy - 1, iz, nx, ny)],
+            cellVertexIds[cellIndex(ix, iy, iz, nx, ny)],
+            cellVertexIds[cellIndex(ix - 1, iy, iz, nx, ny)],
+          ],
+          desiredDirection
+        );
       }
     }
   }
