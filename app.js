@@ -1889,6 +1889,512 @@ function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
   };
 }
 
+const TETRAHEDRA = [
+  [0, 5, 1, 6],
+  [0, 1, 2, 6],
+  [0, 2, 3, 6],
+  [0, 3, 7, 6],
+  [0, 7, 4, 6],
+  [0, 4, 5, 6],
+];
+
+function normalize3(x, y, z) {
+  const length = Math.hypot(x, y, z);
+  if (length <= 1e-9) {
+    return [0, 0, 1];
+  }
+  return [x / length, y / length, z / length];
+}
+
+function pushSmoothTriangle(positions, normals, faceNormals, a, b, c, na, nb, nc, desiredDirection) {
+  const abx = b[0] - a[0];
+  const aby = b[1] - a[1];
+  const abz = b[2] - a[2];
+  const acx = c[0] - a[0];
+  const acy = c[1] - a[1];
+  const acz = c[2] - a[2];
+  let nx = aby * acz - abz * acy;
+  let ny = abz * acx - abx * acz;
+  let nz = abx * acy - aby * acx;
+  const magnitude = Math.hypot(nx, ny, nz);
+  if (magnitude <= 1e-9) {
+    return;
+  }
+
+  let pa = a;
+  let pb = b;
+  let pc = c;
+  let pna = na;
+  let pnb = nb;
+  let pnc = nc;
+  if (nx * desiredDirection[0] + ny * desiredDirection[1] + nz * desiredDirection[2] < 0) {
+    pb = c;
+    pc = b;
+    pnb = nc;
+    pnc = nb;
+    nx *= -1;
+    ny *= -1;
+    nz *= -1;
+  }
+
+  const faceNormal = [nx / magnitude, ny / magnitude, nz / magnitude];
+  positions.push(...pa, ...pb, ...pc);
+  normals.push(...pna, ...pnb, ...pnc);
+  faceNormals.push(...faceNormal);
+}
+
+function vertexIndex(ix, iy, iz, gx, gy) {
+  return ix + gx * (iy + gy * iz);
+}
+
+function computeGridFieldValues(xEdges, yEdges, zEdges, sampleField) {
+  const gx = xEdges.length;
+  const gy = yEdges.length;
+  const gz = zEdges.length;
+  const values = new Float32Array(gx * gy * gz);
+
+  for (let iz = 0; iz < gz; iz += 1) {
+    const z = zEdges[iz];
+    for (let iy = 0; iy < gy; iy += 1) {
+      const y = yEdges[iy];
+      for (let ix = 0; ix < gx; ix += 1) {
+        values[vertexIndex(ix, iy, iz, gx, gy)] = sampleField(xEdges[ix], y, z);
+      }
+    }
+  }
+
+  return values;
+}
+
+function computeGridGradients(xEdges, yEdges, zEdges, values) {
+  const gx = xEdges.length;
+  const gy = yEdges.length;
+  const gz = zEdges.length;
+  const gradients = new Float32Array(values.length * 3);
+
+  const sample = (ix, iy, iz) => values[vertexIndex(ix, iy, iz, gx, gy)];
+
+  for (let iz = 0; iz < gz; iz += 1) {
+    const prevZ = Math.max(iz - 1, 0);
+    const nextZ = Math.min(iz + 1, gz - 1);
+    const dz = Math.max(1e-6, zEdges[nextZ] - zEdges[prevZ]);
+    for (let iy = 0; iy < gy; iy += 1) {
+      const prevY = Math.max(iy - 1, 0);
+      const nextY = Math.min(iy + 1, gy - 1);
+      const dy = Math.max(1e-6, yEdges[nextY] - yEdges[prevY]);
+      for (let ix = 0; ix < gx; ix += 1) {
+        const prevX = Math.max(ix - 1, 0);
+        const nextX = Math.min(ix + 1, gx - 1);
+        const dx = Math.max(1e-6, xEdges[nextX] - xEdges[prevX]);
+        const index = vertexIndex(ix, iy, iz, gx, gy) * 3;
+        const normal = normalize3(
+          (sample(nextX, iy, iz) - sample(prevX, iy, iz)) / dx,
+          (sample(ix, nextY, iz) - sample(ix, prevY, iz)) / dy,
+          (sample(ix, iy, nextZ) - sample(ix, iy, prevZ)) / dz
+        );
+        gradients[index + 0] = normal[0];
+        gradients[index + 1] = normal[1];
+        gradients[index + 2] = normal[2];
+      }
+    }
+  }
+
+  return gradients;
+}
+
+function interpolateIsoVertex(a, b, va, vb, ga, gb) {
+  const delta = va - vb;
+  const t = Math.abs(delta) <= 1e-9 ? 0.5 : clamp(va / delta, 0, 1);
+  const point = [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
+  const normal = normalize3(
+    ga[0] + (gb[0] - ga[0]) * t,
+    ga[1] + (gb[1] - ga[1]) * t,
+    ga[2] + (gb[2] - ga[2]) * t
+  );
+  return { point, normal };
+}
+
+function polygonizeTetrahedron(points, values, gradients, positions, normals, faceNormals) {
+  const inside = [];
+  const outside = [];
+  for (let index = 0; index < 4; index += 1) {
+    if (values[index] <= 0) {
+      inside.push(index);
+    } else {
+      outside.push(index);
+    }
+  }
+
+  if (!inside.length || inside.length === 4) {
+    return;
+  }
+
+  const insideCentroid = [0, 0, 0];
+  const outsideCentroid = [0, 0, 0];
+  for (const index of inside) {
+    insideCentroid[0] += points[index][0];
+    insideCentroid[1] += points[index][1];
+    insideCentroid[2] += points[index][2];
+  }
+  for (const index of outside) {
+    outsideCentroid[0] += points[index][0];
+    outsideCentroid[1] += points[index][1];
+    outsideCentroid[2] += points[index][2];
+  }
+  insideCentroid[0] /= inside.length;
+  insideCentroid[1] /= inside.length;
+  insideCentroid[2] /= inside.length;
+  outsideCentroid[0] /= outside.length;
+  outsideCentroid[1] /= outside.length;
+  outsideCentroid[2] /= outside.length;
+  const desiredDirection = [
+    outsideCentroid[0] - insideCentroid[0],
+    outsideCentroid[1] - insideCentroid[1],
+    outsideCentroid[2] - insideCentroid[2],
+  ];
+
+  if (inside.length === 1 || inside.length === 3) {
+    const pivot = inside.length === 1 ? inside[0] : outside[0];
+    const others = inside.length === 1 ? outside : inside;
+    const intersections = others.map((index) =>
+      interpolateIsoVertex(points[pivot], points[index], values[pivot], values[index], gradients[pivot], gradients[index])
+    );
+    pushSmoothTriangle(
+      positions,
+      normals,
+      faceNormals,
+      intersections[0].point,
+      intersections[1].point,
+      intersections[2].point,
+      intersections[0].normal,
+      intersections[1].normal,
+      intersections[2].normal,
+      desiredDirection
+    );
+    return;
+  }
+
+  const a = interpolateIsoVertex(
+    points[inside[0]],
+    points[outside[0]],
+    values[inside[0]],
+    values[outside[0]],
+    gradients[inside[0]],
+    gradients[outside[0]]
+  );
+  const b = interpolateIsoVertex(
+    points[inside[0]],
+    points[outside[1]],
+    values[inside[0]],
+    values[outside[1]],
+    gradients[inside[0]],
+    gradients[outside[1]]
+  );
+  const c = interpolateIsoVertex(
+    points[inside[1]],
+    points[outside[1]],
+    values[inside[1]],
+    values[outside[1]],
+    gradients[inside[1]],
+    gradients[outside[1]]
+  );
+  const d = interpolateIsoVertex(
+    points[inside[1]],
+    points[outside[0]],
+    values[inside[1]],
+    values[outside[0]],
+    gradients[inside[1]],
+    gradients[outside[0]]
+  );
+
+  pushSmoothTriangle(
+    positions,
+    normals,
+    faceNormals,
+    a.point,
+    b.point,
+    c.point,
+    a.normal,
+    b.normal,
+    c.normal,
+    desiredDirection
+  );
+  pushSmoothTriangle(
+    positions,
+    normals,
+    faceNormals,
+    a.point,
+    c.point,
+    d.point,
+    a.normal,
+    c.normal,
+    d.normal,
+    desiredDirection
+  );
+}
+
+function keepLargestSolidVertexComponent(values, gx, gy, gz) {
+  const total = values.length;
+  const remaining = new Uint8Array(total);
+  for (let index = 0; index < total; index += 1) {
+    if (values[index] <= 0) {
+      remaining[index] = 1;
+    }
+  }
+
+  const queue = new Int32Array(total);
+  let best = [];
+
+  for (let start = 0; start < total; start += 1) {
+    if (!remaining[start]) {
+      continue;
+    }
+
+    let head = 0;
+    let tail = 0;
+    const component = [];
+    queue[tail++] = start;
+    remaining[start] = 0;
+
+    while (head < tail) {
+      const current = queue[head++];
+      component.push(current);
+      const iz = Math.floor(current / (gx * gy));
+      const rem = current - iz * gx * gy;
+      const iy = Math.floor(rem / gx);
+      const ix = rem - iy * gx;
+
+      for (let dz = -1; dz <= 1; dz += 1) {
+        const nz = iz + dz;
+        if (nz < 0 || nz >= gz) {
+          continue;
+        }
+        for (let dy = -1; dy <= 1; dy += 1) {
+          const ny = iy + dy;
+          if (ny < 0 || ny >= gy) {
+            continue;
+          }
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const nx = ix + dx;
+            if (nx < 0 || nx >= gx || (!dx && !dy && !dz)) {
+              continue;
+            }
+            const neighbor = vertexIndex(nx, ny, nz, gx, gy);
+            if (!remaining[neighbor]) {
+              continue;
+            }
+            remaining[neighbor] = 0;
+            queue[tail++] = neighbor;
+          }
+        }
+      }
+    }
+
+    if (component.length > best.length) {
+      best = component;
+    }
+  }
+
+  if (!best.length) {
+    return;
+  }
+
+  const keep = new Uint8Array(total);
+  for (const index of best) {
+    keep[index] = 1;
+  }
+  for (let index = 0; index < total; index += 1) {
+    if (values[index] <= 0 && !keep[index]) {
+      values[index] = Math.abs(values[index]) + 1e-4;
+    }
+  }
+}
+
+function buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField, options = {}) {
+  const gx = xEdges.length;
+  const gy = yEdges.length;
+  const gz = zEdges.length;
+  const values = computeGridFieldValues(xEdges, yEdges, zEdges, sampleField);
+
+  if (options.keepLargestComponent) {
+    keepLargestSolidVertexComponent(values, gx, gy, gz);
+  }
+
+  const gradients = computeGridGradients(xEdges, yEdges, zEdges, values);
+  const positions = [];
+  const normals = [];
+  const faceNormals = [];
+
+  const cubeVertices = new Array(8);
+  const cubeValues = new Array(8);
+  const cubeGradients = new Array(8);
+
+  for (let iz = 0; iz < gz - 1; iz += 1) {
+    const z1 = zEdges[iz];
+    const z2 = zEdges[iz + 1];
+    for (let iy = 0; iy < gy - 1; iy += 1) {
+      const y1 = yEdges[iy];
+      const y2 = yEdges[iy + 1];
+      for (let ix = 0; ix < gx - 1; ix += 1) {
+        const cornerIndices = [
+          vertexIndex(ix, iy, iz, gx, gy),
+          vertexIndex(ix + 1, iy, iz, gx, gy),
+          vertexIndex(ix + 1, iy + 1, iz, gx, gy),
+          vertexIndex(ix, iy + 1, iz, gx, gy),
+          vertexIndex(ix, iy, iz + 1, gx, gy),
+          vertexIndex(ix + 1, iy, iz + 1, gx, gy),
+          vertexIndex(ix + 1, iy + 1, iz + 1, gx, gy),
+          vertexIndex(ix, iy + 1, iz + 1, gx, gy),
+        ];
+
+        let hasInside = false;
+        let hasOutside = false;
+        for (let index = 0; index < 8; index += 1) {
+          const value = values[cornerIndices[index]];
+          cubeValues[index] = value;
+          hasInside ||= value <= 0;
+          hasOutside ||= value > 0;
+        }
+        if (!hasInside && !hasOutside) {
+          continue;
+        }
+        if (!hasInside || !hasOutside) {
+          continue;
+        }
+
+        cubeVertices[0] = [xEdges[ix], yEdges[iy], z1];
+        cubeVertices[1] = [xEdges[ix + 1], yEdges[iy], z1];
+        cubeVertices[2] = [xEdges[ix + 1], yEdges[iy + 1], z1];
+        cubeVertices[3] = [xEdges[ix], yEdges[iy + 1], z1];
+        cubeVertices[4] = [xEdges[ix], yEdges[iy], z2];
+        cubeVertices[5] = [xEdges[ix + 1], yEdges[iy], z2];
+        cubeVertices[6] = [xEdges[ix + 1], yEdges[iy + 1], z2];
+        cubeVertices[7] = [xEdges[ix], yEdges[iy + 1], z2];
+
+        for (let index = 0; index < 8; index += 1) {
+          const gradientIndex = cornerIndices[index] * 3;
+          cubeGradients[index] = [
+            gradients[gradientIndex + 0],
+            gradients[gradientIndex + 1],
+            gradients[gradientIndex + 2],
+          ];
+        }
+
+        for (const tetra of TETRAHEDRA) {
+          polygonizeTetrahedron(
+            tetra.map((corner) => cubeVertices[corner]),
+            tetra.map((corner) => cubeValues[corner]),
+            tetra.map((corner) => cubeGradients[corner]),
+            positions,
+            normals,
+            faceNormals
+          );
+        }
+      }
+    }
+  }
+
+  return {
+    mesh: {
+      positions: new Float32Array(positions),
+      normals: new Float32Array(normals),
+      faceNormals: new Float32Array(faceNormals),
+      triangleCount: faceNormals.length / 3,
+    },
+    values,
+  };
+}
+
+function estimateSolidVolumeFromFieldGrid(xEdges, yEdges, zEdges, values) {
+  const gx = xEdges.length;
+  const gy = yEdges.length;
+  const gz = zEdges.length;
+  const nx = gx - 1;
+  const ny = gy - 1;
+  const nz = gz - 1;
+  let solidVolume = 0;
+  const sliceMask = new Uint8Array(nx * ny);
+  const midIndex = Math.floor(nz * 0.5);
+
+  for (let iz = 0; iz < nz; iz += 1) {
+    const dz = zEdges[iz + 1] - zEdges[iz];
+    for (let iy = 0; iy < ny; iy += 1) {
+      const dy = yEdges[iy + 1] - yEdges[iy];
+      for (let ix = 0; ix < nx; ix += 1) {
+        const dx = xEdges[ix + 1] - xEdges[ix];
+        const corners = [
+          values[vertexIndex(ix, iy, iz, gx, gy)],
+          values[vertexIndex(ix + 1, iy, iz, gx, gy)],
+          values[vertexIndex(ix + 1, iy + 1, iz, gx, gy)],
+          values[vertexIndex(ix, iy + 1, iz, gx, gy)],
+          values[vertexIndex(ix, iy, iz + 1, gx, gy)],
+          values[vertexIndex(ix + 1, iy, iz + 1, gx, gy)],
+          values[vertexIndex(ix + 1, iy + 1, iz + 1, gx, gy)],
+          values[vertexIndex(ix, iy + 1, iz + 1, gx, gy)],
+        ];
+        const mean = corners.reduce((sum, value) => sum + value, 0) / corners.length;
+        if (mean <= 0) {
+          solidVolume += dx * dy * dz;
+          if (iz === midIndex) {
+            sliceMask[ix + iy * nx] = 1;
+          }
+        }
+      }
+    }
+  }
+
+  return { solidVolume, sliceMask };
+}
+
+function estimateSolidVolumeFromCellCenters(xEdges, yEdges, zEdges, sampleField) {
+  const nx = xEdges.length - 1;
+  const ny = yEdges.length - 1;
+  const nz = zEdges.length - 1;
+  let solidVolume = 0;
+
+  for (let iz = 0; iz < nz; iz += 1) {
+    const z = (zEdges[iz] + zEdges[iz + 1]) * 0.5;
+    const dz = zEdges[iz + 1] - zEdges[iz];
+    for (let iy = 0; iy < ny; iy += 1) {
+      const y = (yEdges[iy] + yEdges[iy + 1]) * 0.5;
+      const dy = yEdges[iy + 1] - yEdges[iy];
+      for (let ix = 0; ix < nx; ix += 1) {
+        const x = (xEdges[ix] + xEdges[ix + 1]) * 0.5;
+        if (sampleField(x, y, z) > 0) {
+          continue;
+        }
+        solidVolume += (xEdges[ix + 1] - xEdges[ix]) * dy * dz;
+      }
+    }
+  }
+
+  return solidVolume;
+}
+
+function sdBoxCentered(px, py, pz, hx, hy, hz) {
+  const qx = Math.abs(px) - hx;
+  const qy = Math.abs(py) - hy;
+  const qz = Math.abs(pz) - hz;
+  const ox = Math.max(qx, 0);
+  const oy = Math.max(qy, 0);
+  const oz = Math.max(qz, 0);
+  return Math.hypot(ox, oy, oz) + Math.min(Math.max(qx, qy, qz), 0);
+}
+
+function sdVerticalCylinder(x, y, z, cx, cy, radius, z0, z1) {
+  const radial = Math.hypot(x - cx, y - cy) - radius;
+  const centerZ = (z0 + z1) * 0.5;
+  const halfHeight = Math.max(0, (z1 - z0) * 0.5);
+  const axial = Math.abs(z - centerZ) - halfHeight;
+  const ox = Math.max(radial, 0);
+  const oy = Math.max(axial, 0);
+  return Math.hypot(ox, oy) + Math.min(Math.max(radial, axial), 0);
+}
+
 function distanceToSegment(px, py, ax, ay, bx, by) {
   const dx = bx - ax;
   const dy = by - ay;
@@ -2410,7 +2916,6 @@ function buildPillarVoxelDesign({ mode, params, layout, tunnelSegments = [], tun
   const cupDepth = Math.min(params.cupDepth, params.thickness * 0.42);
   const tunnelDia = tunnelSegments.length ? tunnelSegments[0].radius * 2 : 0;
   const resolution = estimatePillarResolution(params, tunnelDia);
-
   const xAnchors = [params.frame, params.width - params.frame];
   const yAnchors = [params.frame, params.length - params.frame];
   const zAnchors = [0, params.thickness, params.thickness - cupDepth];
@@ -2426,99 +2931,51 @@ function buildPillarVoxelDesign({ mode, params, layout, tunnelSegments = [], tun
 
   const xEdges = buildAnchoredEdges(params.width, resolution, xAnchors);
   const yEdges = buildAnchoredEdges(params.length, resolution, yAnchors);
-  const zEdges = buildAnchoredEdges(params.thickness, clamp(Math.min(resolution, params.thickness / 12), 0.18, 0.48), zAnchors);
-  const nx = xEdges.length - 1;
-  const ny = yEdges.length - 1;
-  const nz = zEdges.length - 1;
-  const occupancy = new Uint8Array(nx * ny * nz);
-  const tubeMask = new Uint8Array(nx * ny);
-  const topHeights = new Float32Array(nx * ny);
-  const xCenters = new Float32Array(nx);
-  const yCenters = new Float32Array(ny);
-  const zCenters = new Float32Array(nz);
+  const zEdges = buildAnchoredEdges(params.thickness, clamp(Math.min(resolution, params.thickness / 12), 0.18, 0.52), zAnchors);
+  const halfWidth = params.width * 0.5;
+  const halfLength = params.length * 0.5;
+  const halfThickness = params.thickness * 0.5;
 
-  for (let ix = 0; ix < nx; ix += 1) {
-    xCenters[ix] = (xEdges[ix] + xEdges[ix + 1]) * 0.5;
-  }
-  for (let iy = 0; iy < ny; iy += 1) {
-    yCenters[iy] = (yEdges[iy] + yEdges[iy + 1]) * 0.5;
-  }
-  for (let iz = 0; iz < nz; iz += 1) {
-    zCenters[iz] = (zEdges[iz] + zEdges[iz + 1]) * 0.5;
-  }
+  const sampleField = (x, y, z) => {
+    const boxField = sdBoxCentered(x - halfWidth, y - halfLength, z - halfThickness, halfWidth, halfLength, halfThickness);
+    let voidField = Infinity;
 
-  for (let iy = 0; iy < ny; iy += 1) {
-    const y = yCenters[iy];
-    for (let ix = 0; ix < nx; ix += 1) {
-      const x = xCenters[ix];
-      const x1 = xEdges[ix];
-      const x2 = xEdges[ix + 1];
-      const y1 = yEdges[iy];
-      const y2 = yEdges[iy + 1];
-      const flatIndex = ix + iy * nx;
-      const inInterior =
-        x >= params.frame &&
-        x <= params.width - params.frame &&
-        y >= params.frame &&
-        y <= params.length - params.frame;
-      if (!inInterior) {
-        topHeights[flatIndex] = params.thickness;
-        continue;
+    for (const center of layout.centers) {
+      voidField = Math.min(
+        voidField,
+        sdVerticalCylinder(x, y, z, center.x, center.y, capillaryRadius, 0, params.thickness)
+      );
+      if (cupDepth > 0) {
+        voidField = Math.min(
+          voidField,
+          sdVerticalCylinder(
+            x,
+            y,
+            z,
+            center.x,
+            center.y,
+            cupRadius,
+            params.thickness - cupDepth,
+            params.thickness
+          )
+        );
       }
-      for (const center of layout.centers) {
-        if (circleIntersectsCell(center.x, center.y, capillaryRadius, x1, x2, y1, y2)) {
-          tubeMask[flatIndex] = 1;
-          break;
-        }
-      }
-      topHeights[flatIndex] = buildDimpleHeight(
-        params.thickness,
-        x,
-        y,
-        params.thickness,
-        layout.centers,
-        cupRadius,
-        cupDepth
+    }
+
+    for (const segment of tunnelSegments) {
+      voidField = Math.min(
+        voidField,
+        distanceToSegment3d(x, y, z, segment.x1, segment.y1, segment.z1, segment.x2, segment.y2, segment.z2) -
+          segment.radius
       );
     }
-  }
 
-  let solidVolume = 0;
-  for (let iz = 0; iz < nz; iz += 1) {
-    const z = zCenters[iz];
-    const dz = zEdges[iz + 1] - zEdges[iz];
-    for (let iy = 0; iy < ny; iy += 1) {
-      const y = yCenters[iy];
-      const dy = yEdges[iy + 1] - yEdges[iy];
-      for (let ix = 0; ix < nx; ix += 1) {
-        const x = xCenters[ix];
-        const dx = xEdges[ix + 1] - xEdges[ix];
-        const edgeFrame =
-          x < params.frame ||
-          x > params.width - params.frame ||
-          y < params.frame ||
-          y > params.length - params.frame;
-        let solid = edgeFrame;
-        if (!solid) {
-          const flatIndex = ix + iy * nx;
-          if (tubeMask[flatIndex]) {
-            continue;
-          }
-          if (tunnelSegments.length && distanceToTunnelNetwork3d(x, y, z, tunnelSegments) <= 0) {
-            continue;
-          }
-          solid = z <= topHeights[flatIndex] + 1e-6;
-        }
-        if (!solid) {
-          continue;
-        }
-        occupancy[ix + nx * (iy + ny * iz)] = 1;
-        solidVolume += dx * dy * dz;
-      }
-    }
-  }
+    return Math.max(boxField, -voidField);
+  };
 
-  const mesh = buildVoxelMesh(xEdges, yEdges, zEdges, occupancy);
+  const smooth = buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField);
+  const solidVolume = estimateSolidVolumeFromCellCenters(xEdges, yEdges, zEdges, sampleField);
+  const mesh = smooth.mesh;
   const totalVolume = params.width * params.length * params.thickness;
   const porosity = clamp(1 - solidVolume / Math.max(totalVolume, 1), 0, 0.98);
   const massGram = solidVolume * 0.00124;
@@ -2568,7 +3025,7 @@ function buildPillarVoxelDesign({ mode, params, layout, tunnelSegments = [], tun
     params,
     resolution,
     mesh,
-    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zEdges[1] - zEdges[0], 2)} mm`,
+    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / smooth iso / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zEdges[1] - zEdges[0], 2)} mm`,
     pillarCenters: layout.centers,
     capillaryRadius,
     cupRadius,
@@ -2645,53 +3102,33 @@ function buildGyroidDesign(inputParams) {
   const xEdges = buildEdges(params.width, resolution);
   const yEdges = buildEdges(params.length, resolution);
   const zEdges = buildEdges(params.thickness, zResolution);
-  const nx = xEdges.length - 1;
-  const ny = yEdges.length - 1;
-  const nz = zEdges.length - 1;
-  const occupancy = new Uint8Array(nx * ny * nz);
-  const sliceMask = new Uint8Array(nx * ny);
-
   const ax = (Math.PI * 2) / params.cell;
   const ay = (Math.PI * 2) / params.cell;
   const az = (Math.PI * 2) / Math.max(params.cell * params.zStretch, 0.1);
   const threshold = clamp((params.wall / params.cell) * 1.95, 0.14, 0.62);
-  const midIndex = Math.floor(nz * 0.5);
-  let occupiedCount = 0;
-
-  for (let iz = 0; iz < nz; iz += 1) {
-    const z = (zEdges[iz] + zEdges[iz + 1]) * 0.5;
-    for (let iy = 0; iy < ny; iy += 1) {
-      const y = (yEdges[iy] + yEdges[iy + 1]) * 0.5;
-      for (let ix = 0; ix < nx; ix += 1) {
-        const x = (xEdges[ix] + xEdges[ix + 1]) * 0.5;
-        const edgeFrame =
-          x < params.frame ||
-          x > params.width - params.frame ||
-          y < params.frame ||
-          y > params.length - params.frame;
-        const field =
-          Math.sin(ax * x) * Math.cos(ay * y) +
+  const halfWidth = params.width * 0.5;
+  const halfLength = params.length * 0.5;
+  const halfThickness = params.thickness * 0.5;
+  const sampleField = (x, y, z) => {
+    const boxField = sdBoxCentered(x - halfWidth, y - halfLength, z - halfThickness, halfWidth, halfLength, halfThickness);
+    const frameField = Math.min(
+      x - params.frame,
+      params.width - params.frame - x,
+      y - params.frame,
+      params.length - params.frame - y
+    );
+    const gyroidField =
+      Math.abs(
+        Math.sin(ax * x) * Math.cos(ay * y) +
           Math.sin(ay * y) * Math.cos(az * z) +
-          Math.sin(az * z) * Math.cos(ax * x);
-        const solid = edgeFrame || Math.abs(field) <= threshold;
-        if (!solid) {
-          continue;
-        }
-        occupancy[ix + nx * (iy + ny * iz)] = 1;
-        occupiedCount += 1;
-        if (iz === midIndex) {
-          sliceMask[ix + iy * nx] = 1;
-        }
-      }
-    }
-  }
+          Math.sin(az * z) * Math.cos(ax * x)
+      ) - threshold;
+    return Math.max(boxField, Math.min(frameField, gyroidField));
+  };
 
-  const mesh = buildVoxelMesh(xEdges, yEdges, zEdges, occupancy);
-  const voxelVolume =
-    (xEdges[1] - xEdges[0]) *
-    (yEdges[1] - yEdges[0]) *
-    (zEdges[1] - zEdges[0]);
-  const solidVolume = occupiedCount * voxelVolume;
+  const smooth = buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField, { keepLargestComponent: true });
+  const mesh = smooth.mesh;
+  const { solidVolume, sliceMask } = estimateSolidVolumeFromFieldGrid(xEdges, yEdges, zEdges, smooth.values);
   const totalVolume = params.width * params.length * params.thickness;
   const porosity = clamp(1 - solidVolume / Math.max(totalVolume, 1), 0, 0.98);
   const massGram = solidVolume * 0.00124;
@@ -2721,7 +3158,7 @@ function buildGyroidDesign(inputParams) {
     sliceMask,
     xEdges,
     yEdges,
-    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zResolution, 2)} mm`,
+    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / smooth iso / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zResolution, 2)} mm`,
     metricCards: [
       { label: "基本セル径", value: `${formatValue(params.cell, 1)} mm` },
       { label: "骨格厚み目標", value: `${formatValue(params.wall, 2)} mm` },
