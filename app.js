@@ -253,6 +253,16 @@ const GYROID_FIELDS = [
   { key: "thickness", label: "厚み", unit: "mm", min: 5, max: 20, step: 0.2, precision: 2 },
   { key: "frame", label: "外周フレーム幅", unit: "mm", min: 2, max: 12, step: 0.2, precision: 2 },
   {
+    key: "basePlate",
+    label: "ベースプレート厚",
+    unit: "mm",
+    min: 0,
+    max: 5,
+    step: 0.1,
+    precision: 2,
+    help: "印刷の初期層の定着のため底面に稠密な板を生成します。0 で無効。板の上端で gyroid に滑らかに接続します。",
+  },
+  {
     key: "cell",
     label: "基本セル径",
     unit: "mm",
@@ -835,6 +845,7 @@ const MODELS = {
     noteCopy: [
       "こちらは 3D プリンタらしく、面ではなく体積で水と空気の通り道を持たせる案です。gyroid は空隙側も骨格側も連続しやすく、スポンジ的な構造の比較対象として扱いやすいです。",
       "基本セル径を小さくし、骨格をやや太めにすると保水寄りになります。セル径を大きくして伸長率を上げると、より通気寄りで軽い構造になります。",
+      "ベースプレートを設定すると、底面に稠密な板が生成され、初期層の定着面積が大幅に増えて印刷の失敗を防ぎます。板の上端から gyroid へ滑らかに遷移します。",
       "実機ではノズル径とレイヤー高に強く依存するので、このモードは造形条件との相性を見るためのベータ枠として使ってください。",
     ],
     legend: [
@@ -847,6 +858,7 @@ const MODELS = {
       length: 108,
       thickness: 10.2,
       frame: 4,
+      basePlate: 1.2,
       cell: 7.2,
       wall: 1,
       zStretch: 1.1,
@@ -859,6 +871,7 @@ const MODELS = {
           length: 84,
           thickness: 8.4,
           frame: 3.4,
+          basePlate: 1,
           cell: 5.8,
           wall: 0.9,
           zStretch: 0.9,
@@ -871,6 +884,7 @@ const MODELS = {
           length: 112,
           thickness: 11.2,
           frame: 4.2,
+          basePlate: 1.4,
           cell: 6.4,
           wall: 1.1,
           zStretch: 1,
@@ -883,6 +897,7 @@ const MODELS = {
           length: 120,
           thickness: 12.6,
           frame: 4.4,
+          basePlate: 1,
           cell: 9.2,
           wall: 0.88,
           zStretch: 1.35,
@@ -1404,7 +1419,7 @@ function parseFieldValue(field, raw) {
 }
 
 function getFieldMin(field) {
-  return field.type === "toggle" ? 0 : 0;
+  return field.min != null ? field.min : 0;
 }
 
 function toHash() {
@@ -1582,19 +1597,25 @@ function renderControls() {
 
     const range = document.querySelector(`#${controlId(field.key, "range")}`);
     const number = document.querySelector(`#${controlId(field.key, "number")}`);
-    const handleInput = (event) => {
-      const next = Number(event.target.value);
+    const applyValue = (raw, syncBoth) => {
+      const next = Number(raw);
       if (!Number.isFinite(next)) {
         return;
       }
       const clamped = clamp(next, getFieldMin(field), field.max);
       getActiveParams()[field.key] = clamped;
       range.value = String(clamped);
-      number.value = String(clamped);
+      if (syncBoth) {
+        number.value = String(clamped);
+      }
       markDirty();
     };
-    range.addEventListener("input", handleInput);
-    number.addEventListener("input", handleInput);
+    range.addEventListener("input", () => {
+      applyValue(range.value, true);
+    });
+    number.addEventListener("change", () => {
+      applyValue(number.value, true);
+    });
     state.controlMap.set(field.key, { field, range, number, root: range.closest("[data-control]") });
   }
 
@@ -3178,9 +3199,9 @@ function buildPillarLadderDesign(inputParams) {
 function estimateGyroidResolution(params) {
   const dominant = Math.max(params.width, params.length);
   return clamp(
-    Math.min(params.wall * 0.7, params.cell * 0.2, params.thickness / 10),
-    Math.max(0.52, dominant / 200),
-    1.02
+    Math.min(params.wall * 0.45, params.cell * 0.16),
+    Math.max(0.34, dominant / 300),
+    0.82
   );
 }
 
@@ -3190,13 +3211,16 @@ function buildGyroidDesign(inputParams) {
     length: clamp(inputParams.length, 0, 220),
     thickness: clamp(inputParams.thickness, 0, 20),
     frame: clamp(inputParams.frame, 0, Math.min(inputParams.width, inputParams.length) * 0.24),
+    basePlate: clamp(inputParams.basePlate ?? 0, 0, 5),
     cell: clamp(inputParams.cell, 0, 18),
     wall: clamp(inputParams.wall, 0, 2.8),
     zStretch: clamp(inputParams.zStretch, 0, 1.8),
   };
+  const effectiveBasePlate = Math.min(params.basePlate, params.thickness * 0.45);
+  const blendZone = effectiveBasePlate > 0 ? clamp(params.cell * 0.35, 0.4, 2.0) : 0;
 
   const resolution = estimateGyroidResolution(params);
-  const zResolution = clamp(Math.min(resolution, params.cell * 0.18), 0.42, 0.94);
+  const zResolution = clamp(Math.min(resolution, params.cell * 0.14), 0.28, 0.72);
   const xEdges = buildEdges(params.width, resolution);
   const yEdges = buildEdges(params.length, resolution);
   const zEdges = buildEdges(params.thickness, zResolution);
@@ -3215,13 +3239,26 @@ function buildGyroidDesign(inputParams) {
       y - params.frame,
       params.length - params.frame - y
     );
-    const gyroidField =
+    const gyroidRaw =
       Math.abs(
         Math.sin(ax * x) * Math.cos(ay * y) +
           Math.sin(ay * y) * Math.cos(az * z) +
           Math.sin(az * z) * Math.cos(ax * x)
       ) - threshold;
-    return Math.max(boxField, Math.min(frameField, gyroidField));
+    let interiorField;
+    if (effectiveBasePlate > 0 && z < effectiveBasePlate + blendZone) {
+      const plateField = z - effectiveBasePlate;
+      if (z <= effectiveBasePlate) {
+        interiorField = plateField;
+      } else {
+        const t = (z - effectiveBasePlate) / blendZone;
+        const blend = t * t * (3 - 2 * t);
+        interiorField = gyroidRaw * blend + plateField * (1 - blend);
+      }
+    } else {
+      interiorField = gyroidRaw;
+    }
+    return Math.max(boxField, Math.min(frameField, interiorField));
   };
 
   const smooth = buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField, { keepLargestComponent: true });
@@ -3244,6 +3281,9 @@ function buildGyroidDesign(inputParams) {
   if (params.zStretch > 1.45) {
     warnings.push("厚み方向の伸長が大きく、上下の連通は増えますが中間層の密度ムラも強くなります。");
   }
+  if (effectiveBasePlate > 0 && effectiveBasePlate < 0.6) {
+    warnings.push("ベースプレートが薄めです。初期層の定着には 0.8 mm 以上を推奨します。");
+  }
   if (!warnings.length) {
     warnings.push("この案は水路も空路も 3D で連続しやすく、スポンジ的な母材を試したい時の比較対象として有効です。");
   }
@@ -3260,6 +3300,7 @@ function buildGyroidDesign(inputParams) {
     metricCards: [
       { label: "基本セル径", value: `${formatValue(params.cell, 1)} mm` },
       { label: "骨格厚み目標", value: `${formatValue(params.wall, 2)} mm` },
+      { label: "ベースプレート", value: effectiveBasePlate > 0 ? `${formatValue(effectiveBasePlate, 1)} mm` : "なし" },
       { label: "厚み方向伸長", value: `${formatValue(params.zStretch, 2)} x` },
       { label: "中央断面充填率", value: `${formatValue((sliceMask.reduce((sum, cell) => sum + cell, 0) / sliceMask.length) * 100, 1)} %` },
       { label: "実空隙率", value: `${formatValue(porosity * 100, 1)} %` },
