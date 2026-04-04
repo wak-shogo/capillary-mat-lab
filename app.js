@@ -1840,94 +1840,10 @@ function buildOccupancyFromTopHeights(xEdges, yEdges, zEdges, solidMask, topHeig
   return { occupancy, occupiedCount, voxelVolume };
 }
 
-/** 12 directions: two steps on axes, zero on the third (edge-adjacent voxels, not face-adjacent). */
-const VOXEL_EDGE_OFFSETS = (() => {
-  const out = [];
-  for (const a of [-1, 1]) {
-    for (const b of [-1, 1]) {
-      out.push([a, b, 0], [a, 0, b], [0, a, b]);
-    }
-  }
-  return out;
-})();
-
-function bridgeOffsetsForEdgeVector(dx, dy, dz) {
-  if (dx !== 0 && dy !== 0 && dz === 0) {
-    return [
-      [Math.sign(dx), 0, 0],
-      [0, Math.sign(dy), 0],
-    ];
-  }
-  if (dx !== 0 && dz !== 0 && dy === 0) {
-    return [
-      [Math.sign(dx), 0, 0],
-      [0, 0, Math.sign(dz)],
-    ];
-  }
-  if (dy !== 0 && dz !== 0 && dx === 0) {
-    return [
-      [0, Math.sign(dy), 0],
-      [0, 0, Math.sign(dz)],
-    ];
-  }
-  return [];
-}
-
-/**
- * Face-adjacent union of cubes has a 2-manifold boundary; edge-only contacts add voxels so each
- * diagonal solid pair shares a face with at least one bridge cell (polycube-style fix).
- */
-function bridgeVoxelOccupancyForManifoldShell(occupancy, nx, ny, nz) {
-  const at = (ix, iy, iz) => {
-    if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) {
-      return 0;
-    }
-    return occupancy[ix + nx * (iy + ny * iz)];
-  };
-  const setSolid = (ix, iy, iz) => {
-    occupancy[ix + nx * (iy + ny * iz)] = 1;
-  };
-
-  let guard = 0;
-  let changed = true;
-  while (changed && guard < 512) {
-    guard += 1;
-    changed = false;
-    for (let iz = 0; iz < nz; iz += 1) {
-      for (let iy = 0; iy < ny; iy += 1) {
-        for (let ix = 0; ix < nx; ix += 1) {
-          if (!at(ix, iy, iz)) {
-            continue;
-          }
-          for (const [dx, dy, dz] of VOXEL_EDGE_OFFSETS) {
-            const ox = ix + dx;
-            const oy = iy + dy;
-            const oz = iz + dz;
-            if (!at(ox, oy, oz)) {
-              continue;
-            }
-            for (const [bx, by, bz] of bridgeOffsetsForEdgeVector(dx, dy, dz)) {
-              const tx = ix + bx;
-              const ty = iy + by;
-              const tz = iz + bz;
-              if (!at(tx, ty, tz)) {
-                setSolid(tx, ty, tz);
-                changed = true;
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
 function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
   const nx = xEdges.length - 1;
   const ny = yEdges.length - 1;
   const nz = zEdges.length - 1;
-  const occ = new Uint8Array(occupancy);
-  bridgeVoxelOccupancyForManifoldShell(occ, nx, ny, nz);
   const positions = [];
   const normals = [];
   const faceNormals = [];
@@ -1939,7 +1855,7 @@ function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
     if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) {
       return 0;
     }
-    return occ[ix + nx * (iy + ny * iz)];
+    return occupancy[ix + nx * (iy + ny * iz)];
   };
 
   for (let iz = 0; iz < nz; iz += 1) {
@@ -2816,7 +2732,7 @@ function buildPillarVoxelDesign({ mode, params, layout, tunnelSegments = [], tun
     params,
     resolution,
     mesh,
-    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / watertight voxel surface / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zEdges[1] - zEdges[0], 2)} mm`,
+    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / voxel shell surface / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zEdges[1] - zEdges[0], 2)} mm`,
     pillarCenters: layout.centers,
     capillaryRadius,
     cupRadius,
@@ -2957,7 +2873,7 @@ function buildGyroidDesign(inputParams) {
     sliceMask,
     xEdges,
     yEdges,
-    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / watertight voxel surface / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zResolution, 2)} mm`,
+    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / voxel shell surface / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zResolution, 2)} mm`,
     metricCards: [
       { label: "基本セル径", value: `${formatValue(params.cell, 1)} mm` },
       { label: "骨格厚み目標", value: `${formatValue(params.wall, 2)} mm` },
