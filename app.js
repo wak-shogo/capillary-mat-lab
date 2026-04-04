@@ -260,7 +260,7 @@ const GYROID_FIELDS = [
     max: 5,
     step: 0.1,
     precision: 2,
-    help: "印刷の初期層の定着のため底面に稠密な板を生成します。0 で無効。板の上端で gyroid に滑らかに接続します。",
+    help: "印刷の初期層の定着のため底面に稠密な板を生成します。0 で無効。SDF の和集合 (min) でジャイロイドと連結します。",
   },
   {
     key: "cell",
@@ -845,7 +845,7 @@ const MODELS = {
     noteCopy: [
       "こちらは 3D プリンタらしく、面ではなく体積で水と空気の通り道を持たせる案です。gyroid は空隙側も骨格側も連続しやすく、スポンジ的な構造の比較対象として扱いやすいです。",
       "基本セル径を小さくし、骨格をやや太めにすると保水寄りになります。セル径を大きくして伸長率を上げると、より通気寄りで軽い構造になります。",
-      "ベースプレートを設定すると、底面に稠密な板が生成され、初期層の定着面積が大幅に増えて印刷の失敗を防ぎます。板の上端から gyroid へ滑らかに遷移します。",
+      "ベースプレートを設定すると、底面に稠密な板が生成され、初期層の定着面積が増えます。プレートと gyroid は位相的に一本化されるよう SDF を min で結合しています。",
       "実機ではノズル径とレイヤー高に強く依存するので、このモードは造形条件との相性を見るためのベータ枠として使ってください。",
     ],
     legend: [
@@ -1840,10 +1840,94 @@ function buildOccupancyFromTopHeights(xEdges, yEdges, zEdges, solidMask, topHeig
   return { occupancy, occupiedCount, voxelVolume };
 }
 
+/** 12 directions: two steps on axes, zero on the third (edge-adjacent voxels, not face-adjacent). */
+const VOXEL_EDGE_OFFSETS = (() => {
+  const out = [];
+  for (const a of [-1, 1]) {
+    for (const b of [-1, 1]) {
+      out.push([a, b, 0], [a, 0, b], [0, a, b]);
+    }
+  }
+  return out;
+})();
+
+function bridgeOffsetsForEdgeVector(dx, dy, dz) {
+  if (dx !== 0 && dy !== 0 && dz === 0) {
+    return [
+      [Math.sign(dx), 0, 0],
+      [0, Math.sign(dy), 0],
+    ];
+  }
+  if (dx !== 0 && dz !== 0 && dy === 0) {
+    return [
+      [Math.sign(dx), 0, 0],
+      [0, 0, Math.sign(dz)],
+    ];
+  }
+  if (dy !== 0 && dz !== 0 && dx === 0) {
+    return [
+      [0, Math.sign(dy), 0],
+      [0, 0, Math.sign(dz)],
+    ];
+  }
+  return [];
+}
+
+/**
+ * Face-adjacent union of cubes has a 2-manifold boundary; edge-only contacts add voxels so each
+ * diagonal solid pair shares a face with at least one bridge cell (polycube-style fix).
+ */
+function bridgeVoxelOccupancyForManifoldShell(occupancy, nx, ny, nz) {
+  const at = (ix, iy, iz) => {
+    if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) {
+      return 0;
+    }
+    return occupancy[ix + nx * (iy + ny * iz)];
+  };
+  const setSolid = (ix, iy, iz) => {
+    occupancy[ix + nx * (iy + ny * iz)] = 1;
+  };
+
+  let guard = 0;
+  let changed = true;
+  while (changed && guard < 512) {
+    guard += 1;
+    changed = false;
+    for (let iz = 0; iz < nz; iz += 1) {
+      for (let iy = 0; iy < ny; iy += 1) {
+        for (let ix = 0; ix < nx; ix += 1) {
+          if (!at(ix, iy, iz)) {
+            continue;
+          }
+          for (const [dx, dy, dz] of VOXEL_EDGE_OFFSETS) {
+            const ox = ix + dx;
+            const oy = iy + dy;
+            const oz = iz + dz;
+            if (!at(ox, oy, oz)) {
+              continue;
+            }
+            for (const [bx, by, bz] of bridgeOffsetsForEdgeVector(dx, dy, dz)) {
+              const tx = ix + bx;
+              const ty = iy + by;
+              const tz = iz + bz;
+              if (!at(tx, ty, tz)) {
+                setSolid(tx, ty, tz);
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
   const nx = xEdges.length - 1;
   const ny = yEdges.length - 1;
   const nz = zEdges.length - 1;
+  const occ = new Uint8Array(occupancy);
+  bridgeVoxelOccupancyForManifoldShell(occ, nx, ny, nz);
   const positions = [];
   const normals = [];
   const faceNormals = [];
@@ -1855,7 +1939,7 @@ function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
     if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) {
       return 0;
     }
-    return occupancy[ix + nx * (iy + ny * iz)];
+    return occ[ix + nx * (iy + ny * iz)];
   };
 
   for (let iz = 0; iz < nz; iz += 1) {
@@ -1909,9 +1993,9 @@ function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
             faceNormals,
             [
               [x2, y1, z1],
-              [x2, y1, z2],
-              [x2, y2, z2],
               [x2, y2, z1],
+              [x2, y2, z2],
+              [x2, y1, z2],
             ],
             [1, 0, 0]
           );
@@ -1924,9 +2008,9 @@ function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
             faceNormals,
             [
               [x1, y1, z1],
-              [x1, y2, z1],
-              [x1, y2, z2],
               [x1, y1, z2],
+              [x1, y2, z2],
+              [x1, y2, z1],
             ],
             [-1, 0, 0]
           );
@@ -1939,9 +2023,9 @@ function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
             faceNormals,
             [
               [x1, y2, z1],
-              [x2, y2, z1],
-              [x2, y2, z2],
               [x1, y2, z2],
+              [x2, y2, z2],
+              [x2, y2, z1],
             ],
             [0, 1, 0]
           );
@@ -1954,9 +2038,9 @@ function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
             faceNormals,
             [
               [x1, y1, z1],
-              [x1, y1, z2],
-              [x2, y1, z2],
               [x2, y1, z1],
+              [x2, y1, z2],
+              [x1, y1, z2],
             ],
             [0, -1, 0]
           );
@@ -1971,70 +2055,6 @@ function buildVoxelMesh(xEdges, yEdges, zEdges, occupancy) {
     faceNormals: new Float32Array(faceNormals),
     triangleCount: faceNormals.length / 3,
   };
-}
-
-const CUBE_EDGES = [
-  [0, 1],
-  [1, 2],
-  [2, 3],
-  [3, 0],
-  [4, 5],
-  [5, 6],
-  [6, 7],
-  [7, 4],
-  [0, 4],
-  [1, 5],
-  [2, 6],
-  [3, 7],
-];
-
-function normalize3(x, y, z) {
-  const length = Math.hypot(x, y, z);
-  if (length <= 1e-9) {
-    return [0, 0, 1];
-  }
-  return [x / length, y / length, z / length];
-}
-
-function pushSmoothTriangle(positions, normals, faceNormals, a, b, c, na, nb, nc, desiredDirection) {
-  const abx = b[0] - a[0];
-  const aby = b[1] - a[1];
-  const abz = b[2] - a[2];
-  const acx = c[0] - a[0];
-  const acy = c[1] - a[1];
-  const acz = c[2] - a[2];
-  let nx = aby * acz - abz * acy;
-  let ny = abz * acx - abx * acz;
-  let nz = abx * acy - aby * acx;
-  const magnitude = Math.hypot(nx, ny, nz);
-
-  if (magnitude <= 1e-9) {
-    positions.push(...a, ...b, ...c);
-    normals.push(...na, ...nb, ...nc);
-    faceNormals.push(...desiredDirection);
-    return;
-  }
-
-  let pa = a;
-  let pb = b;
-  let pc = c;
-  let pna = na;
-  let pnb = nb;
-  let pnc = nc;
-  if (nx * desiredDirection[0] + ny * desiredDirection[1] + nz * desiredDirection[2] < 0) {
-    pb = c;
-    pc = b;
-    pnb = nc;
-    pnc = nb;
-    nx *= -1;
-    ny *= -1;
-    nz *= -1;
-  }
-
-  const faceNormal = [nx / magnitude, ny / magnitude, nz / magnitude];
-  positions.push(...pa, ...pb, ...pc);
-  normals.push(...pna, ...pnb, ...pnc);
-  faceNormals.push(...faceNormal);
 }
 
 function vertexIndex(ix, iy, iz, gx, gy) {
@@ -2060,381 +2080,24 @@ function computeGridFieldValues(xEdges, yEdges, zEdges, sampleField) {
   return values;
 }
 
-function computeGridGradients(xEdges, yEdges, zEdges, values) {
-  const gx = xEdges.length;
-  const gy = yEdges.length;
-  const gz = zEdges.length;
-  const gradients = new Float32Array(values.length * 3);
-
-  const sample = (ix, iy, iz) => values[vertexIndex(ix, iy, iz, gx, gy)];
-
-  for (let iz = 0; iz < gz; iz += 1) {
-    const prevZ = Math.max(iz - 1, 0);
-    const nextZ = Math.min(iz + 1, gz - 1);
-    const dz = Math.max(1e-6, zEdges[nextZ] - zEdges[prevZ]);
-    for (let iy = 0; iy < gy; iy += 1) {
-      const prevY = Math.max(iy - 1, 0);
-      const nextY = Math.min(iy + 1, gy - 1);
-      const dy = Math.max(1e-6, yEdges[nextY] - yEdges[prevY]);
-      for (let ix = 0; ix < gx; ix += 1) {
-        const prevX = Math.max(ix - 1, 0);
-        const nextX = Math.min(ix + 1, gx - 1);
-        const dx = Math.max(1e-6, xEdges[nextX] - xEdges[prevX]);
-        const index = vertexIndex(ix, iy, iz, gx, gy) * 3;
-        const normal = normalize3(
-          (sample(nextX, iy, iz) - sample(prevX, iy, iz)) / dx,
-          (sample(ix, nextY, iz) - sample(ix, prevY, iz)) / dy,
-          (sample(ix, iy, nextZ) - sample(ix, iy, prevZ)) / dz
-        );
-        gradients[index + 0] = normal[0];
-        gradients[index + 1] = normal[1];
-        gradients[index + 2] = normal[2];
-      }
-    }
-  }
-
-  return gradients;
-}
-
-function interpolateIsoVertex(a, b, va, vb, ga, gb) {
-  const delta = va - vb;
-  const t = Math.abs(delta) <= 1e-9 ? 0.5 : clamp(va / delta, 0, 1);
-  const point = [
-    a[0] + (b[0] - a[0]) * t,
-    a[1] + (b[1] - a[1]) * t,
-    a[2] + (b[2] - a[2]) * t,
-  ];
-  const normal = normalize3(
-    ga[0] + (gb[0] - ga[0]) * t,
-    ga[1] + (gb[1] - ga[1]) * t,
-    ga[2] + (gb[2] - ga[2]) * t
-  );
-  return { point, normal };
-}
-
-function cellIndex(ix, iy, iz, nx, ny) {
-  return ix + nx * (iy + ny * iz);
-}
-
-function keepLargestSolidVertexComponent(values, gx, gy, gz) {
-  const total = values.length;
-  const remaining = new Uint8Array(total);
-  for (let index = 0; index < total; index += 1) {
-    if (values[index] <= 0) {
-      remaining[index] = 1;
-    }
-  }
-
-  const queue = new Int32Array(total);
-  let best = [];
-
-  for (let start = 0; start < total; start += 1) {
-    if (!remaining[start]) {
-      continue;
-    }
-
-    let head = 0;
-    let tail = 0;
-    const component = [];
-    queue[tail++] = start;
-    remaining[start] = 0;
-
-    while (head < tail) {
-      const current = queue[head++];
-      component.push(current);
-      const iz = Math.floor(current / (gx * gy));
-      const rem = current - iz * gx * gy;
-      const iy = Math.floor(rem / gx);
-      const ix = rem - iy * gx;
-
-      for (let dz = -1; dz <= 1; dz += 1) {
-        const nz = iz + dz;
-        if (nz < 0 || nz >= gz) {
-          continue;
-        }
-        for (let dy = -1; dy <= 1; dy += 1) {
-          const ny = iy + dy;
-          if (ny < 0 || ny >= gy) {
-            continue;
-          }
-          for (let dx = -1; dx <= 1; dx += 1) {
-            const nx = ix + dx;
-            if (nx < 0 || nx >= gx || (!dx && !dy && !dz)) {
-              continue;
-            }
-            const neighbor = vertexIndex(nx, ny, nz, gx, gy);
-            if (!remaining[neighbor]) {
-              continue;
-            }
-            remaining[neighbor] = 0;
-            queue[tail++] = neighbor;
-          }
-        }
-      }
-    }
-
-    if (component.length > best.length) {
-      best = component;
-    }
-  }
-
-  if (!best.length) {
-    return;
-  }
-
-  const keep = new Uint8Array(total);
-  for (const index of best) {
-    keep[index] = 1;
-  }
-  for (let index = 0; index < total; index += 1) {
-    if (values[index] <= 0 && !keep[index]) {
-      values[index] = Math.abs(values[index]) + 1e-4;
-    }
-  }
-}
-
-function padFieldEdges(edges) {
-  const startStep = Math.max(1e-3, edges[1] - edges[0]);
-  const endStep = Math.max(1e-3, edges[edges.length - 1] - edges[edges.length - 2]);
-  return [edges[0] - startStep, ...edges, edges[edges.length - 1] + endStep];
-}
-
-function buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField, options = {}) {
+function buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField) {
   const values = computeGridFieldValues(xEdges, yEdges, zEdges, sampleField);
-  if (options.keepLargestComponent) {
-    keepLargestSolidVertexComponent(values, xEdges.length, yEdges.length, zEdges.length);
-  }
-
-  const gridXEdges = padFieldEdges(xEdges);
-  const gridYEdges = padFieldEdges(yEdges);
-  const gridZEdges = padFieldEdges(zEdges);
-  const gx = gridXEdges.length;
-  const gy = gridYEdges.length;
-  const gz = gridZEdges.length;
-  const nx = gx - 1;
-  const ny = gy - 1;
-  const nz = gz - 1;
-  const meshValues = computeGridFieldValues(gridXEdges, gridYEdges, gridZEdges, sampleField);
-
-  if (options.keepLargestComponent) {
-    keepLargestSolidVertexComponent(meshValues, gx, gy, gz);
-  }
-
-  const gradients = computeGridGradients(gridXEdges, gridYEdges, gridZEdges, meshValues);
-  const positions = [];
-  const normals = [];
-  const faceNormals = [];
-  const xOffset = (xEdges[0] + xEdges[xEdges.length - 1]) * 0.5;
-  const yOffset = (yEdges[0] + yEdges[yEdges.length - 1]) * 0.5;
-  const zOffset = (zEdges[0] + zEdges[zEdges.length - 1]) * 0.5;
-  const cellVertexIds = new Int32Array(nx * ny * nz).fill(-1);
-  const cellPoints = [];
-  const cellNormals = [];
-  const cubeVertices = new Array(8);
-  const cubeValues = new Array(8);
-  const cubeGradients = new Array(8);
-
+  const nx = xEdges.length - 1;
+  const ny = yEdges.length - 1;
+  const nz = zEdges.length - 1;
+  const occupancy = new Uint8Array(nx * ny * nz);
   for (let iz = 0; iz < nz; iz += 1) {
+    const z = (zEdges[iz] + zEdges[iz + 1]) * 0.5;
     for (let iy = 0; iy < ny; iy += 1) {
+      const y = (yEdges[iy] + yEdges[iy + 1]) * 0.5;
       for (let ix = 0; ix < nx; ix += 1) {
-        const cornerIndices = [
-          vertexIndex(ix, iy, iz, gx, gy),
-          vertexIndex(ix + 1, iy, iz, gx, gy),
-          vertexIndex(ix + 1, iy + 1, iz, gx, gy),
-          vertexIndex(ix, iy + 1, iz, gx, gy),
-          vertexIndex(ix, iy, iz + 1, gx, gy),
-          vertexIndex(ix + 1, iy, iz + 1, gx, gy),
-          vertexIndex(ix + 1, iy + 1, iz + 1, gx, gy),
-          vertexIndex(ix, iy + 1, iz + 1, gx, gy),
-        ];
-
-        let hasInside = false;
-        let hasOutside = false;
-        for (let index = 0; index < 8; index += 1) {
-          const value = meshValues[cornerIndices[index]];
-          cubeValues[index] = value;
-          hasInside ||= value <= 0;
-          hasOutside ||= value > 0;
-        }
-        if (!hasInside || !hasOutside) {
-          continue;
-        }
-
-        cubeVertices[0] = [gridXEdges[ix], gridYEdges[iy], gridZEdges[iz]];
-        cubeVertices[1] = [gridXEdges[ix + 1], gridYEdges[iy], gridZEdges[iz]];
-        cubeVertices[2] = [gridXEdges[ix + 1], gridYEdges[iy + 1], gridZEdges[iz]];
-        cubeVertices[3] = [gridXEdges[ix], gridYEdges[iy + 1], gridZEdges[iz]];
-        cubeVertices[4] = [gridXEdges[ix], gridYEdges[iy], gridZEdges[iz + 1]];
-        cubeVertices[5] = [gridXEdges[ix + 1], gridYEdges[iy], gridZEdges[iz + 1]];
-        cubeVertices[6] = [gridXEdges[ix + 1], gridYEdges[iy + 1], gridZEdges[iz + 1]];
-        cubeVertices[7] = [gridXEdges[ix], gridYEdges[iy + 1], gridZEdges[iz + 1]];
-
-        for (let index = 0; index < 8; index += 1) {
-          const gradientIndex = cornerIndices[index] * 3;
-          cubeGradients[index] = [
-            gradients[gradientIndex + 0],
-            gradients[gradientIndex + 1],
-            gradients[gradientIndex + 2],
-          ];
-        }
-
-        let count = 0;
-        let sx = 0;
-        let sy = 0;
-        let sz = 0;
-        let snx = 0;
-        let sny = 0;
-        let snz = 0;
-        for (const [a, b] of CUBE_EDGES) {
-          if ((cubeValues[a] <= 0) === (cubeValues[b] <= 0)) {
-            continue;
-          }
-          const intersection = interpolateIsoVertex(
-            cubeVertices[a],
-            cubeVertices[b],
-            cubeValues[a],
-            cubeValues[b],
-            cubeGradients[a],
-            cubeGradients[b]
-          );
-          sx += intersection.point[0];
-          sy += intersection.point[1];
-          sz += intersection.point[2];
-          snx += intersection.normal[0];
-          sny += intersection.normal[1];
-          snz += intersection.normal[2];
-          count += 1;
-        }
-
-        if (count < 1) {
-          continue;
-        }
-
-        const eps = 1e-4;
-        const point = [
-          clamp(sx / count, gridXEdges[ix] + eps, gridXEdges[ix + 1] - eps) - xOffset,
-          clamp(sy / count, gridYEdges[iy] + eps, gridYEdges[iy + 1] - eps) - yOffset,
-          clamp(sz / count, gridZEdges[iz] + eps, gridZEdges[iz + 1] - eps) - zOffset,
-        ];
-        const normal = normalize3(snx, sny, snz);
-        const id = cellPoints.length;
-        cellVertexIds[cellIndex(ix, iy, iz, nx, ny)] = id;
-        cellPoints.push(point);
-        cellNormals.push(normal);
+        const x = (xEdges[ix] + xEdges[ix + 1]) * 0.5;
+        occupancy[ix + nx * (iy + ny * iz)] = sampleField(x, y, z) <= 0 ? 1 : 0;
       }
     }
   }
-
-  const pushSurfaceQuad = (ids, desiredDirection) => {
-    if (ids.some((id) => id < 0)) {
-      return;
-    }
-    const a = cellPoints[ids[0]];
-    const b = cellPoints[ids[1]];
-    const c = cellPoints[ids[2]];
-    const d = cellPoints[ids[3]];
-    const na = cellNormals[ids[0]];
-    const nb = cellNormals[ids[1]];
-    const nc = cellNormals[ids[2]];
-    const nd = cellNormals[ids[3]];
-
-    pushSmoothTriangle(positions, normals, faceNormals, a, b, c, na, nb, nc, desiredDirection);
-    pushSmoothTriangle(positions, normals, faceNormals, a, c, d, na, nc, nd, desiredDirection);
-  };
-
-  for (let iz = 1; iz < gz - 1; iz += 1) {
-    for (let iy = 1; iy < gy - 1; iy += 1) {
-      for (let ix = 0; ix < gx - 1; ix += 1) {
-        const aIndex = vertexIndex(ix, iy, iz, gx, gy);
-        const bIndex = vertexIndex(ix + 1, iy, iz, gx, gy);
-        if ((meshValues[aIndex] <= 0) === (meshValues[bIndex] <= 0)) {
-          continue;
-        }
-        const normalIndexA = aIndex * 3;
-        const normalIndexB = bIndex * 3;
-        const desiredDirection = normalize3(
-          gradients[normalIndexA + 0] + gradients[normalIndexB + 0],
-          gradients[normalIndexA + 1] + gradients[normalIndexB + 1],
-          gradients[normalIndexA + 2] + gradients[normalIndexB + 2]
-        );
-        pushSurfaceQuad(
-          [
-            cellVertexIds[cellIndex(ix, iy - 1, iz - 1, nx, ny)],
-            cellVertexIds[cellIndex(ix, iy, iz - 1, nx, ny)],
-            cellVertexIds[cellIndex(ix, iy, iz, nx, ny)],
-            cellVertexIds[cellIndex(ix, iy - 1, iz, nx, ny)],
-          ],
-          desiredDirection
-        );
-      }
-    }
-  }
-
-  for (let iz = 1; iz < gz - 1; iz += 1) {
-    for (let iy = 0; iy < gy - 1; iy += 1) {
-      for (let ix = 1; ix < gx - 1; ix += 1) {
-        const aIndex = vertexIndex(ix, iy, iz, gx, gy);
-        const bIndex = vertexIndex(ix, iy + 1, iz, gx, gy);
-        if ((meshValues[aIndex] <= 0) === (meshValues[bIndex] <= 0)) {
-          continue;
-        }
-        const normalIndexA = aIndex * 3;
-        const normalIndexB = bIndex * 3;
-        const desiredDirection = normalize3(
-          gradients[normalIndexA + 0] + gradients[normalIndexB + 0],
-          gradients[normalIndexA + 1] + gradients[normalIndexB + 1],
-          gradients[normalIndexA + 2] + gradients[normalIndexB + 2]
-        );
-        pushSurfaceQuad(
-          [
-            cellVertexIds[cellIndex(ix - 1, iy, iz - 1, nx, ny)],
-            cellVertexIds[cellIndex(ix, iy, iz - 1, nx, ny)],
-            cellVertexIds[cellIndex(ix, iy, iz, nx, ny)],
-            cellVertexIds[cellIndex(ix - 1, iy, iz, nx, ny)],
-          ],
-          desiredDirection
-        );
-      }
-    }
-  }
-
-  for (let iz = 0; iz < gz - 1; iz += 1) {
-    for (let iy = 1; iy < gy - 1; iy += 1) {
-      for (let ix = 1; ix < gx - 1; ix += 1) {
-        const aIndex = vertexIndex(ix, iy, iz, gx, gy);
-        const bIndex = vertexIndex(ix, iy, iz + 1, gx, gy);
-        if ((meshValues[aIndex] <= 0) === (meshValues[bIndex] <= 0)) {
-          continue;
-        }
-        const normalIndexA = aIndex * 3;
-        const normalIndexB = bIndex * 3;
-        const desiredDirection = normalize3(
-          gradients[normalIndexA + 0] + gradients[normalIndexB + 0],
-          gradients[normalIndexA + 1] + gradients[normalIndexB + 1],
-          gradients[normalIndexA + 2] + gradients[normalIndexB + 2]
-        );
-        pushSurfaceQuad(
-          [
-            cellVertexIds[cellIndex(ix - 1, iy - 1, iz, nx, ny)],
-            cellVertexIds[cellIndex(ix, iy - 1, iz, nx, ny)],
-            cellVertexIds[cellIndex(ix, iy, iz, nx, ny)],
-            cellVertexIds[cellIndex(ix - 1, iy, iz, nx, ny)],
-          ],
-          desiredDirection
-        );
-      }
-    }
-  }
-
-  return {
-    mesh: {
-      positions: new Float32Array(positions),
-      normals: new Float32Array(normals),
-      faceNormals: new Float32Array(faceNormals),
-      triangleCount: faceNormals.length / 3,
-    },
-    values,
-  };
+  const mesh = buildVoxelMesh(xEdges, yEdges, zEdges, occupancy);
+  return { mesh, values };
 }
 
 function estimateSolidVolumeFromFieldGrid(xEdges, yEdges, zEdges, values) {
@@ -3153,7 +2816,7 @@ function buildPillarVoxelDesign({ mode, params, layout, tunnelSegments = [], tun
     params,
     resolution,
     mesh,
-    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / smooth iso / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zEdges[1] - zEdges[0], 2)} mm`,
+    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / watertight voxel surface / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zEdges[1] - zEdges[0], 2)} mm`,
     pillarCenters: layout.centers,
     capillaryRadius,
     cupRadius,
@@ -3226,7 +2889,6 @@ function buildGyroidDesign(inputParams) {
     zStretch: clamp(inputParams.zStretch, 0, 1.8),
   };
   const effectiveBasePlate = Math.min(params.basePlate, params.thickness * 0.45);
-  const blendZone = effectiveBasePlate > 0 ? clamp(params.cell * 0.35, 0.4, 2.0) : 0;
 
   const resolution = estimateGyroidResolution(params);
   const zResolution = clamp(Math.min(resolution, params.cell * 0.14), 0.28, 0.72);
@@ -3254,23 +2916,13 @@ function buildGyroidDesign(inputParams) {
           Math.sin(ay * y) * Math.cos(az * z) +
           Math.sin(az * z) * Math.cos(ax * x)
       ) - threshold;
-    let interiorField;
-    if (effectiveBasePlate > 0 && z < effectiveBasePlate + blendZone) {
-      const plateField = z - effectiveBasePlate;
-      if (z <= effectiveBasePlate) {
-        interiorField = plateField;
-      } else {
-        const t = (z - effectiveBasePlate) / blendZone;
-        const blend = t * t * (3 - 2 * t);
-        interiorField = gyroidRaw * blend + plateField * (1 - blend);
-      }
-    } else {
-      interiorField = gyroidRaw;
-    }
+    const plateSdf = z - effectiveBasePlate;
+    const interiorField =
+      effectiveBasePlate > 0 ? Math.min(gyroidRaw, plateSdf) : gyroidRaw;
     return Math.max(boxField, Math.min(frameField, interiorField));
   };
 
-  const smooth = buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField, { keepLargestComponent: true });
+  const smooth = buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField);
   const mesh = smooth.mesh;
   const { solidVolume, sliceMask } = estimateSolidVolumeFromFieldGrid(xEdges, yEdges, zEdges, smooth.values);
   const totalVolume = params.width * params.length * params.thickness;
@@ -3305,7 +2957,7 @@ function buildGyroidDesign(inputParams) {
     sliceMask,
     xEdges,
     yEdges,
-    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / smooth iso / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zResolution, 2)} mm`,
+    meshInfoText: `${mesh.triangleCount.toLocaleString()} tris / watertight voxel surface / XY ${formatValue(resolution, 2)} mm / Z ${formatValue(zResolution, 2)} mm`,
     metricCards: [
       { label: "基本セル径", value: `${formatValue(params.cell, 1)} mm` },
       { label: "骨格厚み目標", value: `${formatValue(params.wall, 2)} mm` },

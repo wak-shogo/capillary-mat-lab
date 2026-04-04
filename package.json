@@ -1,0 +1,14 @@
+{
+  "name": "plant_mat_designer",
+  "private": true,
+  "type": "module",
+  "description": "植物育成向けの 3D プリント製毛細管マットを、ブラウザ上で設計して STL として書き出す静的 Web アプリです。",
+  "scripts": {
+    "verify:gyroid": "node scripts/verify-gyroid.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wak-shogo/capillary-mat-lab.git"
+  },
+  "license": "ISC"
+}
