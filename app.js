@@ -2007,7 +2007,11 @@ function pushSmoothTriangle(positions, normals, faceNormals, a, b, c, na, nb, nc
   let ny = abz * acx - abx * acz;
   let nz = abx * acy - aby * acx;
   const magnitude = Math.hypot(nx, ny, nz);
+
   if (magnitude <= 1e-9) {
+    positions.push(...a, ...b, ...c);
+    normals.push(...na, ...nb, ...nc);
+    faceNormals.push(...desiredDirection);
     return;
   }
 
@@ -2302,11 +2306,16 @@ function buildSmoothFieldMesh(xEdges, yEdges, zEdges, sampleField, options = {})
           count += 1;
         }
 
-        if (count < 3) {
+        if (count < 1) {
           continue;
         }
 
-        const point = [sx / count - xOffset, sy / count - yOffset, sz / count - zOffset];
+        const eps = 1e-4;
+        const point = [
+          clamp(sx / count, gridXEdges[ix] + eps, gridXEdges[ix + 1] - eps) - xOffset,
+          clamp(sy / count, gridYEdges[iy] + eps, gridYEdges[iy + 1] - eps) - yOffset,
+          clamp(sz / count, gridZEdges[iz] + eps, gridZEdges[iz + 1] - eps) - zOffset,
+        ];
         const normal = normalize3(snx, sny, snz);
         const id = cellPoints.length;
         cellVertexIds[cellIndex(ix, iy, iz, nx, ny)] = id;
@@ -4022,28 +4031,34 @@ async function ensureCurrentDesign(statusMessage = "") {
 }
 
 function exportStl(design) {
-  const lines = ["solid capillary_mat"];
   const positions = design.mesh.positions;
   const faceNormals = design.mesh.faceNormals;
-
-  for (let triangleIndex = 0; triangleIndex < faceNormals.length / 3; triangleIndex += 1) {
-    const nx = faceNormals[triangleIndex * 3 + 0];
-    const ny = faceNormals[triangleIndex * 3 + 1];
-    const nz = faceNormals[triangleIndex * 3 + 2];
-    lines.push(`facet normal ${nx.toFixed(6)} ${ny.toFixed(6)} ${nz.toFixed(6)}`);
-    lines.push(" outer loop");
-    for (let vertex = 0; vertex < 3; vertex += 1) {
-      const offset = triangleIndex * 9 + vertex * 3;
-      lines.push(
-        `  vertex ${positions[offset + 0].toFixed(6)} ${positions[offset + 1].toFixed(6)} ${positions[offset + 2].toFixed(6)}`
-      );
-    }
-    lines.push(" endloop");
-    lines.push("endfacet");
+  const triangleCount = faceNormals.length / 3;
+  const bufferSize = 84 + triangleCount * 50;
+  const buffer = new ArrayBuffer(bufferSize);
+  const view = new DataView(buffer);
+  const header = "binary STL – Capillary Mat Lab";
+  for (let i = 0; i < 80; i += 1) {
+    view.setUint8(i, i < header.length ? header.charCodeAt(i) : 0);
   }
-
-  lines.push("endsolid capillary_mat");
-  return new Blob([lines.join("\n")], { type: "model/stl" });
+  view.setUint32(80, triangleCount, true);
+  let offset = 84;
+  for (let tri = 0; tri < triangleCount; tri += 1) {
+    view.setFloat32(offset, faceNormals[tri * 3], true);
+    view.setFloat32(offset + 4, faceNormals[tri * 3 + 1], true);
+    view.setFloat32(offset + 8, faceNormals[tri * 3 + 2], true);
+    offset += 12;
+    for (let v = 0; v < 3; v += 1) {
+      const base = tri * 9 + v * 3;
+      view.setFloat32(offset, positions[base], true);
+      view.setFloat32(offset + 4, positions[base + 1], true);
+      view.setFloat32(offset + 8, positions[base + 2], true);
+      offset += 12;
+    }
+    view.setUint16(offset, 0, true);
+    offset += 2;
+  }
+  return new Blob([buffer], { type: "model/stl" });
 }
 
 async function downloadCurrentStl() {
